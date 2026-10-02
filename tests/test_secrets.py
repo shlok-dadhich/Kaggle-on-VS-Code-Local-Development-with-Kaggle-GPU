@@ -1,6 +1,6 @@
 """Secret protection, built-in exclusions, and doctor secret scan tests."""
 
-from kaggle_runner import doctor, ignore_rules, sync
+from kaggle_runner import doctor, ignore_rules, sync, urlstore
 
 
 def test_secrets_never_uploaded_even_with_negation(tmp_path, monkeypatch, fake_jupyter_server):
@@ -58,3 +58,24 @@ def test_allow_secrets_flag(tmp_path, monkeypatch):
     monkeypatch.setenv("KAGGLE_SYNC_ALLOW_SECRETS", "1")
     assert ignore_rules.is_secret_path(".env") is False
     assert ignore_rules.is_secret_path("kaggle.json") is False
+
+
+def test_runner_home_inside_project_is_not_synced(
+    tmp_path,
+    monkeypatch,
+    fake_jupyter_server,
+):
+    runner_home = tmp_path / "private-runner-home"
+    monkeypatch.setenv("KAGGLE_RUNNER_HOME", str(runner_home))
+    fake_jupyter_server.clear()
+    urlstore.save_url(tmp_path, fake_jupyter_server.url)
+    (tmp_path / "script.py").write_text("print('safe')", encoding="utf-8")
+
+    client = sync.JupyterClient(fake_jupyter_server.url)
+    sync.sync_once(client, tmp_path)
+
+    assert not any(
+        "private-runner-home" in key
+        for key in fake_jupyter_server.handler_cls.storage
+    )
+    assert doctor.check_runner_home_location(tmp_path).status == "WARN"

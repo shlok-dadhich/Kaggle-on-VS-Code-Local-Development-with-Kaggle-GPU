@@ -23,6 +23,8 @@ from typing import Callable, Optional, Tuple
 import requests
 import websocket
 
+from . import session_guard
+
 
 _ANSI_RE = re.compile(r"\x1b\[[0-9;?]*[A-Za-z]")
 
@@ -350,21 +352,32 @@ def execute_in_kernel(
                 content = {}
 
             if msg_type == "stream":
-                on_text(content.get("text", ""))
+                on_text(session_guard.redact(content.get("text", ""), token))
 
             elif msg_type in ("execute_result", "display_data"):
                 message_data = content.get("data", {})
                 if isinstance(message_data, dict):
                     if "text/plain" in message_data:
-                        on_text(message_data["text/plain"])
+                        on_text(
+                            session_guard.redact(
+                                message_data["text/plain"],
+                                token,
+                            )
+                        )
 
             elif msg_type == "error":
                 had_error = True
                 traceback = content.get("traceback", [])
                 if isinstance(traceback, list):
-                    cleaned = "\n".join(_strip_ansi(line) for line in traceback)
+                    cleaned = "\n".join(
+                        session_guard.redact(_strip_ansi(line), token)
+                        for line in traceback
+                    )
                 else:
-                    cleaned = _strip_ansi(traceback)
+                    cleaned = session_guard.redact(
+                        _strip_ansi(traceback),
+                        token,
+                    )
                 if cleaned:
                     if error_text:
                         error_text += "\n"
@@ -383,15 +396,24 @@ def execute_in_kernel(
                         if reply_traceback:
                             if isinstance(reply_traceback, list):
                                 error_text = "\n".join(
-                                    _strip_ansi(line)
+                                    session_guard.redact(
+                                        _strip_ansi(line),
+                                        token,
+                                    )
                                     for line in reply_traceback
                                 )
                             else:
-                                error_text = _strip_ansi(reply_traceback)
+                                error_text = session_guard.redact(
+                                    _strip_ansi(reply_traceback),
+                                    token,
+                                )
                         else:
                             name = content.get("ename", "")
                             value = content.get("evalue", "")
-                            error_text = f"{name}: {value}".strip(": ")
+                            error_text = session_guard.redact(
+                                f"{name}: {value}".strip(": "),
+                                token,
+                            )
 
                 # Finish on execute_reply. Do NOT rely on
                 # status:idle alone (it may arrive early or

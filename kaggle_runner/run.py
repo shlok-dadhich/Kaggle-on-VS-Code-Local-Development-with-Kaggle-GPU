@@ -280,7 +280,7 @@ def parse_remote_rc(result):
         return None
 
 
-def main(argv=None):
+def _main(argv=None):
     try:
         sys.stdout.reconfigure(encoding="utf-8", errors="replace")
     except Exception:
@@ -402,7 +402,7 @@ def main(argv=None):
             sys.exit(session_guard.EXIT_EXPIRED)
         print()
         print("ERROR: Could not connect to Kaggle.")
-        print(e)
+        print(session_guard.format_exception(e, client.token))
         print()
         sys.exit(session_guard.EXIT_FAILURE)
 
@@ -421,7 +421,10 @@ def main(argv=None):
             urlstore.delete_url(project_root)
             sys.exit(session_guard.EXIT_EXPIRED)
         except Exception as e:
-            print(f"[PREFLIGHT SYNC WARNING] {e}")
+            print(
+                "[PREFLIGHT SYNC WARNING] "
+                f"{session_guard.format_exception(e, client.token)}"
+            )
 
     # Ensure script itself is uploaded
     print(f"Ensuring remote script: {remote_script}")
@@ -449,7 +452,10 @@ def main(argv=None):
         try:
             client.interrupt_kernel()
         except Exception as e:
-            print("Interrupt request failed:", e)
+            print(
+                "Interrupt request failed:",
+                session_guard.format_exception(e, client.token),
+            )
 
         try:
             session_guard.guarded_call(
@@ -483,6 +489,10 @@ def main(argv=None):
     print()
 
     sys.exit(exit_code)
+
+
+def main(argv=None):
+    return session_guard.cli_main(_main, argv)
 
 
 if __name__ == "__main__":

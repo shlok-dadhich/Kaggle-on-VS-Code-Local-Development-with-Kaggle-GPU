@@ -282,10 +282,9 @@ def refresh_pending(client, project_root):
             if sync.should_skip_remote(relative):
                 continue
 
-            if sync.ignore_rules.is_ignored(
+            if sync.is_ignored_path(
                 project_root,
-                relative,
-                is_dir=False,
+                project_root / Path(relative),
             ):
                 continue
 
@@ -628,6 +627,12 @@ def pull_one(client, project_root, relative, size, args, max_bytes):
     """Download one remote file. Returns True on success."""
 
     project_root = Path(project_root).resolve()
+    destination_path = project_root / Path(relative)
+    if sync.runner_paths.is_runner_home_path(project_root, destination_path):
+        print(
+            f"[REFUSE] {relative}: runner state is never pulled into the project."
+        )
+        return False
 
     if max_bytes is not None and size is not None and size > max_bytes:
         print(
@@ -641,7 +646,7 @@ def pull_one(client, project_root, relative, size, args, max_bytes):
             Path(args.dest).expanduser() / Path(relative).name
         )
     else:
-        destination = project_root / Path(relative)
+        destination = destination_path
 
     destination.parent.mkdir(parents=True, exist_ok=True)
 
@@ -718,12 +723,18 @@ def pull_one(client, project_root, relative, size, args, max_bytes):
             ):
                 fail_session_expired()
 
-            print(f"[FAIL] {relative}: {e}")
+            print(
+                f"[FAIL] {relative}: "
+                f"{session_guard.format_exception(e, client.token)}"
+            )
             return False
 
     except Exception as e:
 
-        print(f"[FAIL] {relative}: {e}")
+        print(
+            f"[FAIL] {relative}: "
+            f"{session_guard.format_exception(e, client.token)}"
+        )
         return False
 
     if size is not None:
@@ -767,7 +778,7 @@ def pull_one(client, project_root, relative, size, args, max_bytes):
     return True
 
 
-def main(argv=None):
+def _main(argv=None):
 
     try:
         # sys.stdout.reconfigure is available on Python 3.7+
@@ -823,7 +834,7 @@ def main(argv=None):
 
         print()
         print("ERROR: Could not connect to Kaggle.")
-        print(e)
+        print(session_guard.format_exception(e, client.token))
         print()
         sys.exit(1)
 
@@ -841,7 +852,10 @@ def main(argv=None):
             if is_auth_status(status):
                 fail_session_expired()
 
-            print(f"ERROR: remote listing failed: {e}")
+            print(
+                "ERROR: remote listing failed: "
+                f"{session_guard.format_exception(e, client.token)}"
+            )
             sys.exit(1)
 
         if namespace.list:
@@ -858,7 +872,10 @@ def main(argv=None):
             targets, problems = expand_specs(
                 client, project_root, namespace.paths)
         except Exception as e:
-            print(f"ERROR: remote listing failed: {e}")
+            print(
+                "ERROR: remote listing failed: "
+                f"{session_guard.format_exception(e, client.token)}"
+            )
             sys.exit(1)
 
         for problem in problems:
@@ -870,7 +887,10 @@ def main(argv=None):
         try:
             model = fetch_remote_model(client, relative)
         except Exception as e:
-            print(f"[FAIL] {relative}: {e}")
+            print(
+                f"[FAIL] {relative}: "
+                f"{session_guard.format_exception(e, client.token)}"
+            )
             failed += 1
             continue
 
@@ -895,10 +915,17 @@ def main(argv=None):
         except SystemExit:
             raise
         except Exception as e:
-            print(f"[FAIL] {relative}: {e}")
+            print(
+                f"[FAIL] {relative}: "
+                f"{session_guard.format_exception(e, client.token)}"
+            )
             failed += 1
 
     sys.exit(1 if failed else 0)
+
+
+def main(argv=None):
+    return session_guard.cli_main(_main, argv)
 
 
 if __name__ == "__main__":

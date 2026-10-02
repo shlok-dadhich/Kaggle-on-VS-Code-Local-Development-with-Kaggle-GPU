@@ -119,3 +119,47 @@ def test_pull_returns_offline_exit_code(tmp_path, monkeypatch, fake_jupyter_serv
         assert exc.value.code == session_guard.EXIT_OFFLINE
     finally:
         fake_jupyter_server.handler_cls.fail_500 = False
+
+
+def test_all_clis_redact_fake_server_errors(
+    tmp_path,
+    monkeypatch,
+    fake_jupyter_server,
+    capsys,
+):
+    from kaggle_runner import doctor, pull, run, sync
+
+    token = "test-token-12345"
+    project = tmp_path / "project"
+    project.mkdir()
+    (project / "train.py").write_text("print('test')", encoding="utf-8")
+    monkeypatch.setenv(
+        "KAGGLE_RUNNER_HOME",
+        str(tmp_path / "runner-home"),
+    )
+    monkeypatch.chdir(project)
+    url = fake_jupyter_server.url
+
+    calls = (
+        ("kaggle-sync", lambda: sync.main([url, "--project", str(project)])),
+        ("kaggle-run", lambda: run.main(["--no-sync", "train.py"])),
+        ("kaggle-pull", lambda: pull.main(["--list"])),
+        (
+            "kaggle-sync doctor",
+            lambda: doctor.main([url, "--project", str(project)]),
+        ),
+    )
+
+    for _, call in calls:
+        fake_jupyter_server.clear()
+        fake_jupyter_server.handler_cls.fail_500 = True
+        try:
+            with pytest.raises(SystemExit):
+                call()
+        finally:
+            fake_jupyter_server.handler_cls.fail_500 = False
+
+        captured = capsys.readouterr()
+        output = captured.out + captured.err
+        assert token not in output
+        assert f"/k/test-session/{token}" not in output

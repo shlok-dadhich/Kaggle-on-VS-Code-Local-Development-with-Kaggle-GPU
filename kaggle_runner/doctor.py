@@ -157,7 +157,7 @@ def check_runner_home_writable() -> DoctorResult:
         return DoctorResult(
             "~/.kaggle-runner",
             "FAIL",
-            f"Directory {home} not writable: {e}",
+            f"Directory {home} not writable: {session_guard.format_exception(e)}",
             "Check filesystem permissions for ~/.kaggle-runner or set KAGGLE_RUNNER_HOME",
         )
 
@@ -323,12 +323,32 @@ def check_sync_state(project_root: Path) -> DoctorResult:
     )
 
 
+def check_runner_home_location(project_root: Path) -> DoctorResult:
+    home = runner_paths.runner_home()
+    if runner_paths.is_within(home, project_root):
+        return DoctorResult(
+            "Runner Home Location",
+            "WARN",
+            "Runner state is inside the project and will be excluded from sync",
+            "Move KAGGLE_RUNNER_HOME outside the project directory",
+        )
+    return DoctorResult("Runner Home Location", "PASS", "Runner state is outside the project")
+
+
 def check_secrets_scan(project_root: Path) -> DoctorResult:
     hits = []
     skip_dirs = {".git", "__pycache__", ".pytest_cache", ".venv", "venv", ".kaggle-runner"}
+    from . import sync
 
     for dirpath, dirnames, filenames in os.walk(project_root):
-        dirnames[:] = [d for d in dirnames if d not in skip_dirs]
+        dirnames[:] = [
+            d for d in dirnames
+            if d not in skip_dirs
+            and not runner_paths.is_runner_home_path(
+                project_root,
+                Path(dirpath) / d,
+            )
+        ]
         for f in filenames:
             file_path = Path(dirpath) / f
             try:
@@ -336,7 +356,7 @@ def check_secrets_scan(project_root: Path) -> DoctorResult:
             except ValueError:
                 continue
 
-            if ignore_rules.is_ignored(project_root, rel):
+            if sync.is_ignored_path(project_root, file_path):
                 continue
 
             try:
@@ -757,7 +777,8 @@ _INSPECT_RESULT = json.dumps(info)
             DoctorResult(
                 "Remote Checks",
                 "FAIL",
-                f"Remote doctor check failed: {e}",
+                "Remote doctor check failed: "
+                f"{session_guard.format_exception(e, client.token)}",
                 "Check server status and connectivity",
             )
         )
@@ -839,6 +860,7 @@ def run_doctor(
     results.append(check_cloud_placeholders(project_root))
     results.append(check_files_to_sync(project_root))
     results.append(check_sync_state(project_root))
+    results.append(check_runner_home_location(project_root))
     results.append(check_secrets_scan(project_root))
 
     # Resolve URL for remote checks
@@ -857,7 +879,8 @@ def run_doctor(
                 DoctorResult(
                     "Remote Checks",
                     "FAIL",
-                    f"Could not initialize Jupyter client: {e}",
+                    "Could not initialize Jupyter client: "
+                    f"{session_guard.format_exception(e)}",
                     "Check URL format: https://<host>/k/<session>/<token>/proxy",
                 )
             )
@@ -892,7 +915,7 @@ def run_doctor(
     return session_guard.EXIT_FAILURE if has_fail else session_guard.EXIT_OK
 
 
-def main(argv=None):
+def _main(argv=None):
     if argv is None:
         argv = sys.argv[1:]
 
@@ -916,6 +939,10 @@ def main(argv=None):
         fix=args.fix,
     )
     sys.exit(rc)
+
+
+def main(argv=None):
+    return session_guard.cli_main(_main, argv)
 
 
 if __name__ == "__main__":

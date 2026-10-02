@@ -23,6 +23,22 @@ def runner_home() -> Path:
     return Path.home() / ".kaggle-runner"
 
 
+def is_within(path, root) -> bool:
+    """Return whether path resolves inside root, including equality."""
+    try:
+        Path(path).resolve().relative_to(Path(root).resolve())
+        return True
+    except (OSError, ValueError):
+        return False
+
+
+def is_runner_home_path(project_root, path) -> bool:
+    """Return whether path is the configured runner home or one of its children."""
+    return is_within(path, runner_home()) and is_within(
+        runner_home(), project_root
+    )
+
+
 def project_key(root) -> str:
     """Stable id for a project folder.
 

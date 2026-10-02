@@ -7,9 +7,12 @@ Provides:
 - Exit code constants
 """
 
+import os
 import re
+import sys
 import threading
 import time
+import traceback
 from typing import Callable, Optional
 
 import requests
@@ -40,6 +43,35 @@ def redact(text: str, token: Optional[str] = None) -> str:
         result = result.replace(token, "<redacted>")
 
     return result
+
+
+def format_exception(exc: Exception, token: Optional[str] = None) -> str:
+    """Format an exception for CLI output without leaking a session token."""
+    return redact(f"{type(exc).__name__}: {exc}", token)
+
+
+def format_traceback(exc: Exception, token: Optional[str] = None) -> str:
+    """Format and redact a traceback for opt-in debug output."""
+    return redact(
+        "".join(traceback.format_exception(type(exc), exc, exc.__traceback__)),
+        token,
+    )
+
+
+def cli_main(main_fn: Callable, argv=None):
+    """Run a CLI entry point with one redacted, traceback-free error boundary."""
+    try:
+        return main_fn(argv)
+    except SystemExit:
+        raise
+    except KeyboardInterrupt:
+        print("Interrupted.", file=sys.stderr)
+        raise SystemExit(130) from None
+    except Exception as exc:
+        print(f"ERROR: {format_exception(exc)}", file=sys.stderr)
+        if os.getenv("KAGGLE_RUNNER_DEBUG") == "1":
+            print(format_traceback(exc), file=sys.stderr)
+        raise SystemExit(EXIT_FAILURE) from None
 
 
 def log(*args, token: Optional[str] = None, **kwargs):

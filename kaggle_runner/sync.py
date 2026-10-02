@@ -1499,6 +1499,8 @@ def is_ignored_path(project_root, path):
     """True when a local path is excluded by .kagglesyncignore."""
 
     try:
+        if runner_paths.is_runner_home_path(project_root, path):
+            return True
         relative = Path(path).resolve().relative_to(
             Path(project_root).resolve()
         ).as_posix()
@@ -1540,6 +1542,10 @@ def iter_local_files(project_root):
             name
             for name in dirnames
             if name not in EXCLUDED_DIRS
+            and not runner_paths.is_runner_home_path(
+                project_root,
+                Path(dirpath) / name,
+            )
         ]
 
         if prune_ignored_dirs:
@@ -2442,7 +2448,8 @@ class DependencyManager:
                 print()
                 print(
                     "Dependencies: FAILED "
-                    f"(cannot read {key}: {e})"
+                    f"(cannot read {key}: "
+                    f"{session_guard.format_exception(e, self.client.token)})"
                 )
                 print()
 
@@ -2544,7 +2551,7 @@ class DependencyManager:
 
             print()
             print("Dependencies: FAILED")
-            print(e)
+            print(session_guard.format_exception(e, self.client.token))
             print()
 
             self._dep_failed.add(digest)
@@ -2779,7 +2786,10 @@ def sync_once(client, project_root, verbose=False) -> int:
                     synced.append((relative, signature))
             except Exception as e:
                 if verbose:
-                    print(f"[ERROR] {relative}: {e}")
+                    print(
+                        f"[ERROR] {relative}: "
+                        f"{session_guard.format_exception(e, client.token)}"
+                    )
 
         for relative, signature in synced:
             manifest[relative] = signature
@@ -3281,7 +3291,7 @@ class SyncHandler(
                 print(
                     "[ERROR]",
                     path,
-                    e,
+                    session_guard.format_exception(e, self.client.token),
                 )
                 return
 
@@ -3465,7 +3475,7 @@ class SyncHandler(
 
             print(
                 "[ERROR]",
-                e
+                session_guard.format_exception(e, self.client.token),
             )
 
 
@@ -3531,10 +3541,9 @@ def _remote_should_descend(project_root, relative_dir):
 
     try:
 
-        if ignore_rules.is_ignored(
+        if is_ignored_path(
             project_root,
-            relative_dir,
-            is_dir=True,
+            Path(project_root) / relative_dir,
         ):
             return False
 
@@ -3665,10 +3674,9 @@ def remote_sync_loop(client, project_root, stop_event):
                 if should_skip_remote(relative):
                     continue
 
-                if ignore_rules.is_ignored(
+                if is_ignored_path(
                     project_root,
-                    relative,
-                    is_dir=False,
+                    project_root / Path(relative),
                 ):
                     continue
 
@@ -3783,7 +3791,10 @@ def remote_sync_loop(client, project_root, stop_event):
                     pass
                 break
 
-            print("[REMOTE SYNC ERROR]", e)
+            print(
+                "[REMOTE SYNC ERROR]",
+                session_guard.format_exception(e, client.token),
+            )
 
         if stop_event.wait(interval):
             break
@@ -3817,7 +3828,10 @@ def run_sync(project_root: Path, server_url: str):
             session_guard.log_session_expired()
             urlstore.delete_url(project_root)
             sys.exit(session_guard.EXIT_EXPIRED)
-        print(f"ERROR: Could not connect to Kaggle: {e}")
+        print(
+            "ERROR: Could not connect to Kaggle: "
+            f"{session_guard.format_exception(e, client.token)}"
+        )
         sys.exit(session_guard.EXIT_FAILURE)
 
     print("Kaggle Jupyter Server: OK")
@@ -3832,7 +3846,10 @@ def run_sync(project_root: Path, server_url: str):
     try:
         dependency_manager.check()
     except Exception as e:
-        print("Initial dependency check failed:", e)
+        print(
+            "Initial dependency check failed:",
+            session_guard.format_exception(e, client.token),
+        )
 
     handler = SyncHandler(client, project_root, dependency_manager)
     remote_stop_event = threading.Event()
@@ -3898,7 +3915,7 @@ def run_sync(project_root: Path, server_url: str):
     sys.exit(exit_code)
 
 
-def main(argv=None):
+def _main(argv=None):
     try:
         sys.stdout.reconfigure(encoding="utf-8", errors="replace")
     except Exception:
@@ -3986,6 +4003,10 @@ def main(argv=None):
         print(f"{sec_count} secret-looking files never synced")
 
     run_sync(proj, url)
+
+
+def main(argv=None):
+    return session_guard.cli_main(_main, argv)
 
 
 if __name__ == "__main__":
