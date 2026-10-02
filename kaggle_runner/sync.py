@@ -132,6 +132,7 @@ EXCLUDED_FILES = {
     ".DS_Store",
     "Thumbs.db",
     ".kaggle-sync-state.json",
+    ".kagglesyncignore",
 }
 
 REMOTE_EXCLUDED_DIRS = {
@@ -958,6 +959,30 @@ class JupyterClient:
             404,
         ):
             response.raise_for_status()
+
+    def delete_tree(self, remote_path):
+        """Recursively remove a remote Contents API file or directory."""
+        response = self.request_session().get(
+            self.api_url(remote_path),
+            params={"content": 1},
+            timeout=REQUEST_TIMEOUT,
+        )
+        if response.status_code == 404:
+            return
+        response.raise_for_status()
+        data = response.json()
+        if isinstance(data, dict) and data.get("type") == "directory":
+            for entry in data.get("content") or []:
+                if not isinstance(entry, dict):
+                    continue
+                child_path = entry.get("path")
+                if not child_path:
+                    continue
+                if entry.get("type") == "directory":
+                    self.delete_tree(child_path)
+                elif entry.get("type") == "file":
+                    self.delete(child_path)
+        self.delete(remote_path)
 
 
     # --------------------------------------------------------

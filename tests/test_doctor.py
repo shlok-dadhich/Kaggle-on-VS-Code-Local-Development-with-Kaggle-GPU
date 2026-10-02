@@ -47,7 +47,7 @@ def test_doctor_healthy_fake_server(tmp_path, monkeypatch, fake_jupyter_server, 
 
     # Verify server tree is empty of temp doctor files
     storage = fake_jupyter_server.handler_cls.storage
-    temp_files = [k for k in storage if ".kaggle-doctor-" in k]
+    temp_files = [k for k in storage if "kaggle-doctor-" in k]
     assert temp_files == [], f"Doctor left temporary files behind: {temp_files}"
 
 
@@ -179,7 +179,7 @@ def test_doctor_cleanup_on_ctrl_c(tmp_path, monkeypatch, fake_jupyter_server):
 
     # Server temp storage cleaned up even after interrupt
     storage = fake_jupyter_server.handler_cls.storage
-    temp_files = [k for k in storage if ".kaggle-doctor-" in k]
+    temp_files = [k for k in storage if "kaggle-doctor-" in k]
     assert temp_files == []
 
 

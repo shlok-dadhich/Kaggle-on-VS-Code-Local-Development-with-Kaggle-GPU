@@ -67,3 +67,4 @@ select = ["F", "E9", "B", "W6"]
 testpaths = ["tests"]
 python_files = ["test_*.py"]
 timeout = 60
+markers = ["slow: exercises long-running real Jupyter protocol paths"]

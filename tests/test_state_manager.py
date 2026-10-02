@@ -177,8 +177,8 @@ def test_one_shot_upload_does_not_hold_state_lock(
             worker.join(timeout=1)
             return True
 
-    assert sync.sync_once(Client(), tmp_path) == 2
-    assert acquired_during_upload == [True, True]
+    assert sync.sync_once(Client(), tmp_path) == 1
+    assert acquired_during_upload == [True]
 
 
 def test_same_path_watcher_uploads_are_serialized(

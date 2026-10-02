@@ -70,6 +70,18 @@ class KaggleClient:
         response.raise_for_status()
         return response.json()
 
+    def ensure_directory(self, remote_path):
+        current = []
+        for part in Path(remote_path).parts:
+            current.append(part)
+            response = self.session.put(
+                self.api(f"contents/{'/'.join(current)}"),
+                json={"type": "directory"},
+                timeout=15,
+            )
+            if response.status_code not in (200, 201, 409):
+                response.raise_for_status()
+
     def upload_file(self, local_path, remote_path):
         local_path = Path(local_path)
         remote_parts = Path(remote_path).parts
@@ -95,6 +107,7 @@ class KaggleClient:
             timeout=30,
         )
         response.raise_for_status()
+        return True
 
     def interrupt_kernel(self, kernel_id):
         if not kernel_id:

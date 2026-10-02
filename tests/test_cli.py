@@ -3,6 +3,7 @@
 import os
 import subprocess
 import sys
+import threading
 from unittest.mock import patch
 
 import pytest
@@ -119,6 +120,48 @@ def test_pull_returns_offline_exit_code(tmp_path, monkeypatch, fake_jupyter_serv
         assert exc.value.code == session_guard.EXIT_OFFLINE
     finally:
         fake_jupyter_server.handler_cls.fail_500 = False
+
+
+def test_sync_auth_expiry_is_boxed_once_and_starts_no_threads(
+    tmp_path,
+    monkeypatch,
+    fake_jupyter_server,
+    capsys,
+):
+    from kaggle_runner import session_guard, sync
+
+    monkeypatch.setenv(
+        "KAGGLE_RUNNER_HOME",
+        str(tmp_path.parent / f"{tmp_path.name}-runner"),
+    )
+    monkeypatch.setattr(session_guard, "SESSION_DEAD", threading.Event())
+    fake_jupyter_server.clear()
+    fake_jupyter_server.handler_cls.fail_auth = True
+    before = {
+        thread.ident
+        for thread in threading.enumerate()
+        if thread.name.startswith(("kaggle-", "kaggle-state-lock"))
+    }
+
+    try:
+        with pytest.raises(SystemExit) as error:
+            sync.main([
+                fake_jupyter_server.url,
+                "--project",
+                str(tmp_path),
+            ])
+        assert error.value.code == session_guard.EXIT_EXPIRED
+    finally:
+        fake_jupyter_server.handler_cls.fail_auth = False
+
+    output = capsys.readouterr().out
+    assert output.count("Kaggle session expired or was stopped.") == 1
+    after = {
+        thread.ident
+        for thread in threading.enumerate()
+        if thread.name.startswith(("kaggle-", "kaggle-state-lock"))
+    }
+    assert after == before
 
 
 def test_all_clis_redact_fake_server_errors(

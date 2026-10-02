@@ -183,6 +183,7 @@ def execute_in_kernel(
     seen_reply = False
     reconnects = 0
     last_ping = time.time()
+    last_kernel_check = last_ping
 
     try:
         while True:
@@ -206,6 +207,26 @@ def execute_in_kernel(
                     # short poll window. Keep the connection
                     # alive with periodic pings.
                     now = time.time()
+                    if now - last_kernel_check >= min(ping_interval, 20.0):
+                        http_status, _execution_state = _kernel_execution_state(
+                            http_base,
+                            token,
+                            kernel_id,
+                            poll_interval,
+                        )
+                        last_kernel_check = now
+                        if http_status == 404:
+                            return {
+                                "status": "lost",
+                                "user_expressions": dict(
+                                    user_expression_results
+                                ),
+                                "error_text": (
+                                    "Kaggle session ended "
+                                    "(kernel not found)."
+                                ),
+                                "missed_output": False,
+                            }
                     if now - last_ping >= ping_interval:
                         try:
                             ws.ping()

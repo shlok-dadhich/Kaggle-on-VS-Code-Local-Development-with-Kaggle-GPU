@@ -460,7 +460,7 @@ def run_remote_checks(
     )
 
     doctor_id = uuid.uuid4().hex[:8]
-    temp_remote_dir = f"local-project/.kaggle-doctor-{doctor_id}"
+    temp_remote_dir = f"local-project/kaggle-doctor-{doctor_id}"
     probe_name = "probe.bin"
     probe_remote = f"{temp_remote_dir}/{probe_name}"
     ephemeral_kernel_id: Optional[str] = None
@@ -794,7 +794,7 @@ _INSPECT_RESULT = json.dumps(info)
             cleanup_ok = False
 
         try:
-            client.delete(temp_remote_dir)
+            client.delete_tree(temp_remote_dir)
         except Exception:
             cleanup_ok = False
 
