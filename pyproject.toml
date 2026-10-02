@@ -1,0 +1,61 @@
+[build-system]
+requires = ["setuptools>=68.0", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "kaggle-local-runner"
+dynamic = ["version"]
+description = "Local project -> Kaggle GPU development sync tool"
+readme = "readme.md"
+requires-python = ">=3.9"
+license = {text = "MIT"}
+authors = [
+    {name = "kaggle-local-runner contributors"}
+]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Intended Audience :: Developers",
+    "License :: OSI Approved :: MIT License",
+    "Operating System :: Microsoft :: Windows",
+    "Operating System :: POSIX :: Linux",
+    "Operating System :: MacOS",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.9",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Topic :: System :: Distributed Computing",
+    "Topic :: Utilities",
+]
+dependencies = [
+    "requests>=2.31.0",
+    "websocket-client>=1.7.0",
+    "watchdog>=3.0.0",
+    "pathspec>=0.11.0",
+]
+
+[project.optional-dependencies]
+dev = [
+    "ruff>=0.1.0",
+    "pytest>=7.4.0",
+]
+
+[project.scripts]
+kaggle-sync = "kaggle_runner.sync:main"
+kaggle-run = "kaggle_runner.run:main"
+kaggle-pull = "kaggle_runner.pull:main"
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["kaggle_runner*"]
+
+[tool.setuptools.dynamic]
+version = {attr = "kaggle_runner.__version__"}
+
+[tool.ruff]
+line-length = 100
+target-version = "py39"
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+python_files = ["test_*.py"]
