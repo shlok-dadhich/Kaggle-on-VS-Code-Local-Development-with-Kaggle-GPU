@@ -95,32 +95,33 @@ class OfflineState:
         self._lock = threading.Lock()
         self._printed_offline = False
         self._printed_online = False
+        self.recovered = threading.Event()
 
     @property
     def offline(self) -> bool:
         with self._lock:
             return self._offline
 
-    def mark_offline(self) -> None:
-        with self._lock:
-            if not self._offline:
-                self._offline = True
-                self._printed_offline = False
-                self._printed_online = False
-            if not self._printed_offline:
-                self._printed_offline = True
-                self._printed_online = False
-
-    def mark_online(self) -> None:
+    def mark_offline(self) -> bool:
         with self._lock:
             if self._offline:
-                self._offline = False
-                self._backoff = 2.0
-                self._printed_online = False
-                self._printed_offline = False
-            if not self._printed_online:
-                self._printed_online = True
-                self._printed_offline = False
+                return False
+            self._offline = True
+            self._backoff = 2.0
+            self._printed_offline = True
+            self._printed_online = False
+            return True
+
+    def mark_online(self) -> bool:
+        with self._lock:
+            if not self._offline:
+                return False
+            self._offline = False
+            self._backoff = 2.0
+            self._printed_online = True
+            self._printed_offline = False
+            self.recovered.set()
+            return True
 
     def get_backoff(self) -> float:
         with self._lock:
@@ -167,6 +168,9 @@ def _is_offline_error(error: Exception) -> bool:
         if isinstance(status, int) and status >= 500:
             return True
     return False
+
+
+is_offline_error = _is_offline_error
 
 
 def probe(client) -> str:
@@ -251,7 +255,8 @@ def guarded_call(client, fn: Callable, *args, **kwargs):
     while True:
         try:
             res = fn(*args, **kwargs)
-            OFFLINE_STATE.mark_online()
+            if OFFLINE_STATE.mark_online():
+                log("[ONLINE] Kaggle connection restored")
             return res
         except Exception as e:
             if is_auth_error(e):
@@ -262,15 +267,16 @@ def guarded_call(client, fn: Callable, *args, **kwargs):
                         log_session_expired()
                     raise SessionExpired("Kaggle session expired") from e
                 elif state == 'offline':
-                    OFFLINE_STATE.mark_offline()
+                    if OFFLINE_STATE.mark_offline():
+                        log("[OFFLINE] Kaggle server is unreachable; retrying")
                     continue
                 continue
 
             if _is_offline_error(e):
-                OFFLINE_STATE.mark_offline()
+                if OFFLINE_STATE.mark_offline():
+                    log("[OFFLINE] Kaggle server is unreachable; retrying")
                 backoff = OFFLINE_STATE.get_backoff()
                 if backoff > 0:
-                    log(f"[OFFLINE] cannot reach Kaggle - retrying in {backoff:.0f}s (edits are kept)")
                     time.sleep(backoff)
                     continue
                 else:

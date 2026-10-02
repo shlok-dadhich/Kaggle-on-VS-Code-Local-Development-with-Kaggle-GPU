@@ -1250,11 +1250,11 @@ def migrate_legacy_state(project_root):
     """One-time move of the old in-project state file.
 
     Merges into the new RUNNER_HOME file without overwriting keys
-    that already exist there, then deletes the legacy file.
+    that already exist there and removes the legacy file only after
+    the replacement has been written and verified.
     """
 
     with STATE_LOCK:
-
         legacy = (
             Path(project_root)
             / ".kaggle-sync-state.json"
@@ -1264,40 +1264,21 @@ def migrate_legacy_state(project_root):
             return
 
         try:
-
             with open(legacy, "r", encoding="utf-8") as f:
                 legacy_state = json.load(f)
-
             if not isinstance(legacy_state, dict):
-                legacy_state = {}
-
-        except (OSError, ValueError):
-            legacy_state = {}
-        except Exception:
-            legacy_state = {}
-
+                raise ValueError("legacy state is not a JSON object")
+        except (OSError, ValueError) as exc:
+            print(
+                "WARNING: Could not read legacy sync state; kept "
+                f"{legacy}: {exc}"
+            )
+            return
         new_path = state_file_for_project(project_root)
-
-        try:
-
-            if new_path.exists():
-
-                with open(new_path, "r", encoding="utf-8") as f:
-                    current = json.load(f)
-
-                if not isinstance(current, dict):
-                    current = {}
-
-            else:
-                current = {}
-
-        except (OSError, ValueError):
-            current = {}
-        except Exception:
-            current = {}
+        manager = StateManager(project_root)
+        current = manager._load_all()
 
         for key, value in legacy_state.items():
-
             if key not in current:
                 current[key] = value
             elif (
@@ -1309,27 +1290,27 @@ def migrate_legacy_state(project_root):
                 current[key] = merged
 
         try:
-
-            temporary = new_path.with_name(
-                new_path.name + ".tmp"
+            runner_paths.write_text_atomic(
+                new_path,
+                json.dumps(current, indent=2),
             )
-
-            with open(temporary, "w", encoding="utf-8") as f:
-                json.dump(current, f, indent=2)
-
-            os.replace(temporary, new_path)
-
-        except (OSError, ValueError):
-            pass
-        except Exception:
-            pass
-
+            with open(new_path, "r", encoding="utf-8") as f:
+                verified = json.load(f)
+            if verified != current:
+                raise ValueError("written state did not match the migration")
+        except (OSError, ValueError) as exc:
+            print(
+                "WARNING: Could not verify legacy sync-state migration; "
+                f"kept {legacy}: {exc}"
+            )
+            return
         try:
             legacy.unlink()
-        except (OSError, ValueError):
-            pass
-        except Exception:
-            pass
+        except OSError as exc:
+            print(
+                "WARNING: Migrated state is verified, but could not remove "
+                f"legacy file {legacy}: {exc}"
+            )
 
 
 class StateManager:
@@ -1350,21 +1331,59 @@ class StateManager:
             except (OSError, ValueError):
                 return {}
 
+    def _write_all(self, state: dict):
+        self.state_file.parent.mkdir(parents=True, exist_ok=True)
+        runner_paths.write_text_atomic(
+            self.state_file,
+            json.dumps(state, indent=2),
+        )
+
     def _save_section(self, section: str, data: dict):
         with STATE_LOCK:
-            self.state_file.parent.mkdir(parents=True, exist_ok=True)
             state = self._load_all()
             state[section] = dict(data)
-            temp = self.state_file.with_name(f"{self.state_file.name}.tmp.{os.getpid()}")
-            with open(temp, "w", encoding="utf-8") as f:
-                json.dump(state, f, indent=2)
-            os.replace(temp, self.state_file)
+            self._write_all(state)
+
+    def load_section(self, section: str) -> dict:
+        value = self._load_all().get(section, {})
+        return dict(value) if isinstance(value, dict) else {}
+
+    def get_value(self, section: str, key: str, default=None):
+        return self.load_section(section).get(key, default)
+
+    def set_value(self, section: str, key: str, value):
+        with STATE_LOCK:
+            state = self._load_all()
+            values = state.get(section, {})
+            if not isinstance(values, dict):
+                values = {}
+            values = dict(values)
+            values[key] = value
+            state[section] = values
+            self._write_all(state)
+
+    def delete_value(self, section: str, key: str):
+        with STATE_LOCK:
+            state = self._load_all()
+            values = state.get(section, {})
+            if not isinstance(values, dict) or key not in values:
+                return
+            values = dict(values)
+            del values[key]
+            state[section] = values
+            self._write_all(state)
 
     def load_files(self) -> dict:
-        return dict(self._load_all().get("files", {}) or {})
+        return self.load_section("files")
 
     def save_files(self, manifest: dict):
-        self._save_section("files", manifest)
+        with STATE_LOCK:
+            current = self.load_section("files")
+            current.update(manifest)
+            self._save_section("files", current)
+
+    def delete_file(self, relative_path: str):
+        self.delete_value("files", relative_path)
 
     def load_remote(self) -> dict:
         return dict(self._load_all().get("remote", {}) or {})
@@ -2085,107 +2104,25 @@ class DependencyManager:
             project_root
         ).resolve()
 
-        self.state_file = state_file_for_project(
-            self.project_root
-        )
-
-        self.state = self.load_state()
+        self.state_manager = StateManager(self.project_root)
 
         self._dep_queue = queue.Queue()
-        self._dep_failed = set()
         self._dep_thread = None
         self._dep_stop = threading.Event()
         self._dep_lock = threading.Lock()
         self._last_selection_notice = None
         self._deps_off_reported = False
 
-
-    def load_state(self):
-
-        with STATE_LOCK:
-
-            if not self.state_file.exists():
-                return {
-                    "requirements": {}
-                }
-
-            try:
-
-                with open(
-                    self.state_file,
-                    "r",
-                    encoding="utf-8",
-                ) as f:
-
-                    loaded = json.load(f)
-
-                    if not isinstance(loaded, dict):
-                        return {
-                            "requirements": {}
-                        }
-
-                    requirements = loaded.get(
-                        "requirements",
-                        {},
-                    )
-
-                    if not isinstance(requirements, dict):
-                        requirements = {}
-
-                    return {
-                        "requirements": dict(requirements)
-                    }
-
-            except Exception:
-
-                return {
-                    "requirements": {}
-                }
+    def _record_digest(self, key, digest):
+        self.state_manager.set_value("requirements", key, digest)
 
 
-    def save_state(self):
+    def _record_failed_digest(self, key, digest):
+        self.state_manager.set_value("failed_digest", key, digest)
 
-        with STATE_LOCK:
 
-            requirements = dict(
-                self.state.get("requirements", {}) or {}
-            )
-
-            state = {}
-
-            if self.state_file.exists():
-                try:
-                    with open(
-                        self.state_file,
-                        "r",
-                        encoding="utf-8",
-                    ) as f:
-                        loaded = json.load(f)
-
-                        if isinstance(loaded, dict):
-                            state = loaded
-                except Exception:
-                    state = {}
-
-            state["requirements"] = requirements
-
-            temporary_file = self.state_file.with_suffix(
-                ".tmp"
-            )
-
-            with open(
-                temporary_file,
-                "w",
-                encoding="utf-8",
-            ) as f:
-
-                json.dump(
-                    state,
-                    f,
-                    indent=2,
-                )
-
-            os.replace(temporary_file, self.state_file)
+    def _clear_failed_digest(self, key):
+        self.state_manager.delete_value("failed_digest", key)
 
 
     def install_requirements(
@@ -2390,11 +2327,7 @@ class DependencyManager:
             "\n".join(filtered_lines).encode("utf-8")
         ).hexdigest()
 
-        old_digest = (
-            self.state
-            .get("requirements", {})
-            .get(key)
-        )
+        old_digest = self.state_manager.get_value("requirements", key)
 
         if old_digest == digest:
 
@@ -2406,7 +2339,7 @@ class DependencyManager:
 
             return "up-to-date"
 
-        if digest in self._dep_failed:
+        if self.state_manager.get_value("failed_digest", key) == digest:
 
             if not quiet:
                 print(
@@ -2431,12 +2364,8 @@ class DependencyManager:
 
         if not kept:
 
-            self.state.setdefault(
-                "requirements",
-                {}
-            )[key] = digest
-
-            self.save_state()
+            self._record_digest(key, digest)
+            self._clear_failed_digest(key)
 
             if not quiet:
                 print(
@@ -2471,7 +2400,7 @@ class DependencyManager:
         except Exception as e:
 
             if note_auth_error(e):
-                self._dep_failed.add(digest)
+                self._record_failed_digest(key, digest)
                 return "failed"
 
             print()
@@ -2479,7 +2408,7 @@ class DependencyManager:
             print(session_guard.format_exception(e, self.client.token))
             print()
 
-            self._dep_failed.add(digest)
+            self._record_failed_digest(key, digest)
 
             return "failed"
 
@@ -2492,7 +2421,7 @@ class DependencyManager:
 
         if status == "NO_INTERNET":
 
-            self._dep_failed.add(digest)
+            self._record_failed_digest(key, digest)
 
             print()
             print(
@@ -2505,7 +2434,7 @@ class DependencyManager:
 
         if status != "OK":
 
-            self._dep_failed.add(digest)
+            self._record_failed_digest(key, digest)
 
             detail = result.get("detail", "")
 
@@ -2522,14 +2451,8 @@ class DependencyManager:
         installed = result.get("installed", [])
         satisfied = result.get("satisfied", [])
 
-        self.state.setdefault(
-            "requirements",
-            {}
-        )[key] = digest
-
-        self.save_state()
-
-        self._dep_failed.discard(digest)
+        self._record_digest(key, digest)
+        self._clear_failed_digest(key)
 
         print()
         print(
@@ -2652,63 +2575,69 @@ def sync_once(client, project_root, verbose=False) -> int:
     client.ensure_directory(REMOTE_ROOT)
 
     state_mgr = StateManager(project_root)
-    with STATE_LOCK:
-        manifest = state_mgr.load_files()
-        files = []
+    manifest = state_mgr.load_files()
+    files = []
 
-        for path in iter_local_files(project_root):
-            if not path.is_file():
-                continue
-            if should_skip(path):
-                continue
-            if is_ignored_path(project_root, path):
-                continue
-            if is_cloud_placeholder(path):
-                continue
+    for path in iter_local_files(project_root):
+        if not path.is_file():
+            continue
+        if should_skip(path):
+            continue
+        if is_ignored_path(project_root, path):
+            continue
+        if is_cloud_placeholder(path):
+            continue
 
-            relative = str(path.relative_to(project_root)).replace("\\", "/")
-            try:
-                quick = file_signature(path)
-            except (PermissionError, OSError):
-                continue
+        relative = str(path.relative_to(project_root)).replace("\\", "/")
+        try:
+            quick = file_signature(path)
+        except (PermissionError, OSError):
+            continue
 
-            if quick.get("size", 0) > MAX_FILE_SIZE:
-                continue
+        if quick.get("size", 0) > MAX_FILE_SIZE:
+            continue
 
-            try:
-                signature = file_signature_full(path)
-            except (PermissionError, OSError):
-                continue
+        try:
+            signature = file_signature_full(path)
+        except (PermissionError, OSError):
+            continue
 
-            if signatures_match(manifest.get(relative), signature):
-                continue
+        if signatures_match(manifest.get(relative), signature):
+            continue
 
-            files.append((path, relative, signature))
+        files.append((path, relative, signature))
 
-        if not files:
-            return 0
-
-        synced = []
-        for path, relative, signature in files:
-            remote = remote_path_for(path, project_root)
-            if verbose:
-                print(f"[SYNC] {relative}")
-            try:
-                uploaded = client.upload_file(path, remote)
-                if uploaded:
-                    synced.append((relative, signature))
-            except Exception as e:
-                if verbose:
-                    print(
-                        f"[ERROR] {relative}: "
-                        f"{session_guard.format_exception(e, client.token)}"
+    synced = []
+    for path, relative, signature in files:
+        remote = remote_path_for(path, project_root)
+        if verbose:
+            print(f"[SYNC] {relative}")
+        try:
+            uploaded = client.upload_file(path, remote)
+            if uploaded:
+                synced.append((relative, signature))
+                if session_guard.OFFLINE_STATE.mark_online():
+                    session_guard.log("[ONLINE] Kaggle connection restored")
+        except Exception as e:
+            if session_guard.is_offline_error(e):
+                if session_guard.OFFLINE_STATE.mark_offline():
+                    session_guard.log(
+                        "[OFFLINE] Kaggle server is unreachable; retrying"
                     )
+            if verbose:
+                print(
+                    f"[ERROR] {relative}: "
+                    f"{session_guard.format_exception(e, client.token)}"
+                )
 
-        for relative, signature in synced:
-            manifest[relative] = signature
+    if synced:
+        with STATE_LOCK:
+            manifest = state_mgr.load_files()
+            for relative, signature in synced:
+                manifest[relative] = signature
+            state_mgr.save_files(manifest)
 
-        state_mgr.save_files(manifest)
-        return len(synced)
+    return len(synced)
 
 def initial_sync(
     client,
@@ -2816,10 +2745,8 @@ def initial_sync(
 
         return relative, signature
 
-    with ThreadPoolExecutor(
-        max_workers=SYNC_WORKERS
-    ) as executor:
-
+    executor = ThreadPoolExecutor(max_workers=SYNC_WORKERS)
+    try:
         futures = [
             executor.submit(sync_one, item)
             for item in files
@@ -2832,6 +2759,8 @@ def initial_sync(
 
             if result is not None:
                 synced.append(result)
+    finally:
+        executor.shutdown(wait=True, cancel_futures=True)
 
     for relative, signature in synced:
         manifest[relative] = signature
@@ -2986,11 +2915,30 @@ class SyncHandler(
 
         self._debounce_timers = {}
         self._debounce_lock = threading.Lock()
+        self._file_upload_locks = {}
+        self._active_timers = set()
+        self._stopped = threading.Event()
+
+
+    def stop(self):
+        self._stopped.set()
+        with self._debounce_lock:
+            pending = list(self._debounce_timers.values())
+            timers = set(pending)
+            timers.update(self._active_timers)
+            self._debounce_timers.clear()
+        for timer in pending:
+            timer.cancel()
+        deadline = time.monotonic() + 5
+        for timer in timers:
+            if timer is not threading.current_thread():
+                timer.join(timeout=max(0, deadline - time.monotonic()))
+        return [timer for timer in timers if timer.is_alive()]
 
 
     def sync_file(self, filename):
 
-        if session_guard.SESSION_DEAD.is_set():
+        if self._stopped.is_set() or session_guard.SESSION_DEAD.is_set():
             return
 
         try:
@@ -3033,11 +2981,27 @@ class SyncHandler(
 
 
     def _do_sync_file(self, filename_str):
+        current_thread = threading.current_thread()
+        with self._debounce_lock:
+            self._active_timers.add(current_thread)
+            lock = self._file_upload_locks.setdefault(
+                filename_str,
+                threading.Lock(),
+            )
+        try:
+            with lock:
+                self._do_sync_file_locked(filename_str)
+        finally:
+            with self._debounce_lock:
+                self._active_timers.discard(current_thread)
+
+
+    def _do_sync_file_locked(self, filename_str):
 
         with self._debounce_lock:
             self._debounce_timers.pop(filename_str, None)
 
-        if session_guard.SESSION_DEAD.is_set():
+        if self._stopped.is_set() or session_guard.SESSION_DEAD.is_set():
             return
 
         path = Path(filename_str)
@@ -3177,6 +3141,8 @@ class SyncHandler(
                         manifest,
                     )
 
+                if session_guard.OFFLINE_STATE.mark_online():
+                    session_guard.log("[ONLINE] Kaggle connection restored")
                 _POLL_RESET.set()
 
                 if (
@@ -3195,6 +3161,12 @@ class SyncHandler(
                 if note_auth_error(e):
                     return
 
+                if session_guard.is_offline_error(e):
+                    if session_guard.OFFLINE_STATE.mark_offline():
+                        session_guard.log(
+                            "[OFFLINE] Kaggle server is unreachable; retrying"
+                        )
+
                 if isinstance(e, (PermissionError, OSError)):
 
                     if attempt < 2:
@@ -3212,17 +3184,7 @@ class SyncHandler(
     def _remove_manifest_entry(self, relative):
 
         try:
-            with STATE_LOCK:
-                manifest = load_sync_manifest(
-                    self.project_root
-                )
-
-                if str(relative) in manifest:
-                    del manifest[str(relative)]
-                    save_sync_manifest(
-                        self.project_root,
-                        manifest,
-                    )
+            StateManager(self.project_root).delete_file(str(relative))
         except Exception:
             pass
 
@@ -3504,9 +3466,8 @@ def list_remote_tree_bfs(client, project_root):
     found_files = []
     pending_dirs = [REMOTE_ROOT]
 
-    with ThreadPoolExecutor(
-        max_workers=REMOTE_POLL_CONCURRENCY
-    ) as executor:
+    executor = ThreadPoolExecutor(max_workers=REMOTE_POLL_CONCURRENCY)
+    try:
 
         while pending_dirs:
 
@@ -3544,6 +3505,8 @@ def list_remote_tree_bfs(client, project_root):
 
                     elif entry_type == "file":
                         found_files.append(entry)
+    finally:
+        executor.shutdown(wait=True, cancel_futures=True)
 
     return found_files
 
@@ -3560,6 +3523,7 @@ def remote_sync_loop(client, project_root, stop_event):
         if session_guard.SESSION_DEAD.is_set():
             break
 
+        wait_interval = interval
         try:
             with STATE_LOCK:
                 local_manifest = load_sync_manifest(project_root)
@@ -3569,6 +3533,11 @@ def remote_sync_loop(client, project_root, stop_event):
                 client,
                 project_root,
             )
+            if session_guard.OFFLINE_STATE.mark_online():
+                session_guard.log("[ONLINE] Kaggle connection restored")
+            if session_guard.OFFLINE_STATE.recovered.is_set():
+                session_guard.OFFLINE_STATE.recovered.clear()
+                sync_once(client, project_root, verbose=True)
             current_remote = {}
             changed = False
 
@@ -3704,12 +3673,19 @@ def remote_sync_loop(client, project_root, stop_event):
                     pass
                 break
 
+            if session_guard.is_offline_error(e):
+                if session_guard.OFFLINE_STATE.mark_offline():
+                    session_guard.log(
+                        "[OFFLINE] Kaggle server is unreachable; retrying"
+                    )
+                wait_interval = session_guard.OFFLINE_STATE.get_backoff()
+
             print(
                 "[REMOTE SYNC ERROR]",
                 session_guard.format_exception(e, client.token),
             )
 
-        if stop_event.wait(interval):
+        if stop_event.wait(wait_interval):
             break
 
 
@@ -3752,59 +3728,62 @@ def run_sync(project_root: Path, server_url: str):
     # Start Heartbeat thread
     heartbeat = urlstore.Heartbeat(project_root)
     heartbeat.start()
-
-    initial_sync(client, project_root)
-
-    dependency_manager = DependencyManager(client, project_root)
-    try:
-        dependency_manager.check()
-    except Exception as e:
-        print(
-            "Initial dependency check failed:",
-            session_guard.format_exception(e, client.token),
-        )
-
-    handler = SyncHandler(client, project_root, dependency_manager)
     remote_stop_event = threading.Event()
-    remote_thread = threading.Thread(
-        target=remote_sync_loop,
-        args=(client, project_root, remote_stop_event),
-        name="kaggle-remote-sync",
-        daemon=True,
-    )
-    remote_thread.start()
-
-    observer = Observer()
-    observer.schedule(handler, str(project_root), recursive=True)
-    observer.start()
-
-    print()
-    print("=" * 60)
-    print("KAGGLE AUTOMATIC SYNCHRONIZATION IS RUNNING")
-    print("=" * 60)
-    print()
-    print("Local project:")
-    print(project_root)
-    print()
-    print("Remote project:")
-    print(f"/kaggle/working/{REMOTE_ROOT}")
-    print()
-    print("Requirements are installed only when their contents change.")
-    print()
-    if DOWNLOAD_POLICY == "all":
-        print("Remote auto-download: everything new.")
-    elif DOWNLOAD_POLICY == "off":
-        print("Remote auto-download: off; fetch with kaggle-pull.")
-    else:
-        print(f"Remote auto-download: small text/image files <= {DOWNLOAD_MAX_MB:g} MB; others via kaggle-pull.")
-    print()
-    print(f"Kaggle-created files are checked every {REMOTE_SYNC_INTERVAL:g} seconds.")
-    print()
-    print("Press Ctrl+C to stop.")
-    print()
-
+    dependency_manager = None
+    handler = None
+    remote_thread = None
+    observer = None
     exit_code = session_guard.EXIT_OK
     try:
+        initial_sync(client, project_root)
+
+        dependency_manager = DependencyManager(client, project_root)
+        try:
+            dependency_manager.check()
+        except Exception as e:
+            print(
+                "Initial dependency check failed:",
+                session_guard.format_exception(e, client.token),
+            )
+
+        handler = SyncHandler(client, project_root, dependency_manager)
+        remote_thread = threading.Thread(
+            target=remote_sync_loop,
+            args=(client, project_root, remote_stop_event),
+            name="kaggle-remote-sync",
+            daemon=True,
+        )
+        remote_thread.start()
+
+        observer = Observer()
+        observer.schedule(handler, str(project_root), recursive=True)
+        observer.start()
+
+        print()
+        print("=" * 60)
+        print("KAGGLE AUTOMATIC SYNCHRONIZATION IS RUNNING")
+        print("=" * 60)
+        print()
+        print("Local project:")
+        print(project_root)
+        print()
+        print("Remote project:")
+        print(f"/kaggle/working/{REMOTE_ROOT}")
+        print()
+        print("Requirements are installed only when their contents change.")
+        print()
+        if DOWNLOAD_POLICY == "all":
+            print("Remote auto-download: everything new.")
+        elif DOWNLOAD_POLICY == "off":
+            print("Remote auto-download: off; fetch with kaggle-pull.")
+        else:
+            print(f"Remote auto-download: small text/image files <= {DOWNLOAD_MAX_MB:g} MB; others via kaggle-pull.")
+        print()
+        print(f"Kaggle-created files are checked every {REMOTE_SYNC_INTERVAL:g} seconds.")
+        print()
+        print("Press Ctrl+C to stop.")
+        print()
+
         while True:
             time.sleep(1)
             if session_guard.SESSION_DEAD.is_set():
@@ -3816,14 +3795,46 @@ def run_sync(project_root: Path, server_url: str):
         print("Stopping synchronization...")
     finally:
         remote_stop_event.set()
-        observer.stop()
+        if observer is not None:
+            observer.stop()
+        pending_timers = handler.stop() if handler is not None else []
         heartbeat.stop()
-        try:
-            dependency_manager.stop()
-        except Exception:
-            pass
+        if dependency_manager is not None:
+            try:
+                dependency_manager.stop()
+            except Exception as e:
+                print(
+                    "WARNING: dependency worker shutdown failed: "
+                    f"{session_guard.format_exception(e, client.token)}"
+                )
         urlstore.delete_url(project_root)
-        observer.join()
+        threads = [heartbeat]
+        if observer is not None:
+            threads.append(observer)
+        if remote_thread is not None:
+            threads.append(remote_thread)
+        dependency_thread = (
+            dependency_manager._dep_thread
+            if dependency_manager is not None
+            else None
+        )
+        if dependency_thread is not None:
+            threads.append(dependency_thread)
+        for thread in threads:
+            if thread.ident is not None:
+                thread.join(timeout=5)
+        for timer in pending_timers:
+            if timer.is_alive():
+                print(
+                    "WARNING: thread still alive after shutdown timeout: "
+                    f"{timer.name}"
+                )
+        for thread in threads:
+            if thread.is_alive():
+                print(
+                    "WARNING: thread still alive after shutdown timeout: "
+                    f"{thread.name}"
+                )
 
     sys.exit(exit_code)
 
