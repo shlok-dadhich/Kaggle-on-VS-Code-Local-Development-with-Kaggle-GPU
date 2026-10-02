@@ -936,93 +936,6 @@ class JupyterClient:
         return response.json()
 
 
-    # --------------------------------------------------------
-    # Find Python kernel
-    # --------------------------------------------------------
-
-    def find_kernel(self):
-
-        sessions = self.get_sessions()
-
-        if not sessions:
-            return None
-
-        # Prefer a Python notebook session.
-        for session in sessions:
-
-            kernel = session.get("kernel", {})
-
-            name = (
-                session.get("kernel", {})
-                .get("name", "")
-                .lower()
-            )
-
-            path = session.get("path", "")
-
-            if (
-                "python" in name
-                or path.endswith(".ipynb")
-            ):
-                return kernel.get("id")
-
-        return sessions[0].get(
-            "kernel",
-            {}
-        ).get("id")
-
-
-    # --------------------------------------------------------
-    # Execute Python in remote kernel
-    # --------------------------------------------------------
-
-    def execute(self, code, timeout=None):
-
-        kernel_id = self.find_kernel()
-
-        if not kernel_id:
-
-            raise RuntimeError(
-                "\nNo active Kaggle Python kernel found.\n\n"
-                "Open your local notebook and make sure "
-                "the Kaggle kernel is connected before "
-                "automatic dependency installation."
-            )
-
-        # execute_in_kernel imported at module level
-
-        outputs = []
-
-        def on_text(text):
-
-            outputs.append(text)
-
-            print(
-                "[KAGGLE]",
-                text,
-                end=""
-            )
-
-        result = execute_in_kernel(
-            self.websocket_base,
-            self.base_url,
-            self.token,
-            kernel_id,
-            code,
-            on_text=on_text,
-            timeout=timeout,
-        )
-
-        if result["status"] != "ok":
-
-            raise RuntimeError(
-                result["error_text"]
-                or f"Remote execution failed: {result['status']}"
-            )
-
-        return "".join(outputs)
-
-
 # ============================================================
 # Helpers
 # ============================================================
@@ -1469,6 +1382,18 @@ class StateManager:
 
     def save_pending_remote(self, manifest: dict):
         self._save_section("pending_remote", manifest)
+
+    def load_runner_kernel(self):
+        value = self._load_all().get("runner_kernel")
+        if isinstance(value, dict):
+            return value.get("id")
+        return None
+
+    def save_runner_kernel(self, kernel_id):
+        self._save_section(
+            "runner_kernel",
+            {"id": kernel_id} if kernel_id else {},
+        )
 
 
 def load_sync_manifest(project_root):
@@ -2618,18 +2543,7 @@ class DependencyManager:
 
 
     def _ensure_kernel(self):
-        """Return (kernel_id, temp). Creates a temp kernel if needed."""
-
-        def _find():
-            try:
-                return self.client.find_kernel()
-            except Exception:
-                return None
-
-        kernel_id = session_guard.guarded_call(self.client, _find)
-
-        if kernel_id:
-            return kernel_id, False
+        """Create a private temporary kernel for dependency installation."""
 
         def _create():
             session = self.client.request_session()
@@ -2663,8 +2577,7 @@ class DependencyManager:
                 )
 
             print(
-                "No notebook kernel found; "
-                "created a temporary kernel for the install."
+                "Created an ephemeral kernel for dependency installation."
             )
 
             return kernel_id, True

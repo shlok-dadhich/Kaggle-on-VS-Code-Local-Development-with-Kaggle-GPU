@@ -104,7 +104,7 @@ def test_kaggle_run_no_sync_flag_honored(tmp_path, monkeypatch, fake_jupyter_ser
     with patch.object(run.KaggleClient, "execute", return_value={"status": "ok", "user_expressions": {"rc": {"data": {"text/plain": "0"}}}}):
         # Run with --no-sync
         with pytest.raises(SystemExit) as exc:
-            run.main(["train.py", "--no-sync"])
+            run.main(["--no-sync", "train.py"])
         assert exc.value.code == 0
 
     out = capsys.readouterr().out

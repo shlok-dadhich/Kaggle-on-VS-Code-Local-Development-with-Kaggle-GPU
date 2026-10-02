@@ -114,6 +114,7 @@ def execute_in_kernel(
     poll_interval: float = 5.0,
     ping_interval: float = 20.0,
     max_reconnects: int = 8,
+    _allow_idle_probe: bool = True,
 ) -> dict:
     """Execute code in a remote Jupyter kernel over websocket.
 
@@ -305,12 +306,52 @@ def execute_in_kernel(
                             "missing.",
                             flush=True,
                         )
+                        if _allow_idle_probe:
+                            probe_result = execute_in_kernel(
+                                ws_base,
+                                http_base,
+                                token,
+                                kernel_id,
+                                "pass",
+                                on_text=lambda _text: None,
+                                user_expressions={
+                                    "rc": "_KAGGLE_RUN_RC",
+                                },
+                                timeout=15,
+                                poll_interval=poll_interval,
+                                ping_interval=ping_interval,
+                                max_reconnects=max_reconnects,
+                                _allow_idle_probe=False,
+                            )
+                            expressions = probe_result.get(
+                                "user_expressions",
+                                {},
+                            )
+                            rc_text = (
+                                expressions.get("rc", {})
+                                .get("data", {})
+                                .get("text/plain")
+                            )
+                            try:
+                                int(str(rc_text).strip().strip("'\""))
+                            except (TypeError, ValueError):
+                                return {
+                                    "status": "unknown",
+                                    "user_expressions": expressions,
+                                    "error_text": (
+                                        "run result unknown (connection lost); "
+                                        "check output on Kaggle"
+                                    ),
+                                    "missed_output": True,
+                                }
+                            return {
+                                "status": "ok",
+                                "user_expressions": expressions,
+                                "error_text": "",
+                                "missed_output": True,
+                            }
                         return {
-                            "status": (
-                                "error"
-                                if had_error
-                                else "ok"
-                            ),
+                            "status": "unknown",
                             "user_expressions": dict(
                                 user_expression_results
                             ),
@@ -352,16 +393,21 @@ def execute_in_kernel(
                 content = {}
 
             if msg_type == "stream":
-                on_text(session_guard.redact(content.get("text", ""), token))
+                text = _strip_ansi(
+                    session_guard.redact(content.get("text", ""), token)
+                )
+                on_text(text)
 
             elif msg_type in ("execute_result", "display_data"):
                 message_data = content.get("data", {})
                 if isinstance(message_data, dict):
                     if "text/plain" in message_data:
                         on_text(
-                            session_guard.redact(
-                                message_data["text/plain"],
-                                token,
+                            _strip_ansi(
+                                session_guard.redact(
+                                    message_data["text/plain"],
+                                    token,
+                                )
                             )
                         )
 

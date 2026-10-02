@@ -8,6 +8,7 @@ and performs a one-shot sync if kaggle-sync is not running.
 import argparse
 import base64
 import json
+import os
 import sys
 from pathlib import Path
 from urllib.parse import urlsplit, quote
@@ -17,6 +18,7 @@ import requests
 from . import session_guard, sync, urlstore
 from . import __version__
 from .kernel_exec import execute_in_kernel
+from .kernel_manager import KernelManager, RUNNER_BUSY_MESSAGE
 
 
 REMOTE_ROOT = "/kaggle/working/local-project"
@@ -55,7 +57,6 @@ class KaggleClient:
         self.session.headers.update({
             "Authorization": f"token {self.token}"
         })
-        self._last_kernel_id = None
 
     def api(self, path=""):
         path = path.strip("/")
@@ -95,35 +96,7 @@ class KaggleClient:
         )
         response.raise_for_status()
 
-    def find_kernel(self):
-        response = self.session.get(self.api("sessions"), timeout=15)
-        response.raise_for_status()
-        sessions = response.json() or []
-
-        for s in sessions:
-            kernel = s.get("kernel", {})
-            name = kernel.get("name", "").lower()
-            if "python" in name or s.get("path", "").endswith(".ipynb"):
-                return kernel.get("id")
-
-        if sessions:
-            return sessions[0].get("kernel", {}).get("id")
-
-        # Fallback to kernel list
-        k_resp = self.session.get(self.api("kernels"), timeout=15)
-        if k_resp.status_code == 200:
-            kernels = k_resp.json() or []
-            if kernels:
-                return kernels[0].get("id")
-
-        return None
-
-    def interrupt_kernel(self, kernel_id=None):
-        kernel_id = (
-            kernel_id
-            or self._last_kernel_id
-            or self.find_kernel()
-        )
+    def interrupt_kernel(self, kernel_id):
         if not kernel_id:
             return False
 
@@ -134,15 +107,9 @@ class KaggleClient:
         response.raise_for_status()
         return True
 
-    def execute(self, code, timeout=None, user_expressions=None):
-        kernel_id = self.find_kernel()
+    def execute(self, code, kernel_id, timeout=None, user_expressions=None):
         if not kernel_id:
-            raise RuntimeError(
-                "\nNo active Kaggle Python kernel found.\n\n"
-                "Open your Kaggle notebook or connect to the kernel first."
-            )
-
-        self._last_kernel_id = kernel_id
+            raise RuntimeError("A Kaggle kernel id is required.")
 
         def on_text(text):
             print(text, end="", flush=True)
@@ -306,6 +273,22 @@ def _main(argv=None):
         action="store_true",
         help="Skip one-shot preflight sync before running.",
     )
+    parser.add_argument("--stop", action="store_true", help="Stop the persistent runner kernel.")
+    parser.add_argument(
+        "--restart-kernel",
+        action="store_true",
+        help="Restart the persistent runner kernel before running.",
+    )
+    parser.add_argument(
+        "--new-kernel",
+        action="store_true",
+        help="Run in a separate temporary kernel.",
+    )
+    parser.add_argument(
+        "--shared",
+        action="store_true",
+        help="Explicitly run in the active notebook kernel.",
+    )
     parser.add_argument(
         "--version",
         action="version",
@@ -323,6 +306,29 @@ def _main(argv=None):
 
     namespace = parser.parse_args(argv)
 
+    if namespace.stop:
+        if namespace.script:
+            parser.error("--stop cannot be combined with a script.")
+        project_root = Path.cwd().resolve()
+        server_url = urlstore.load_url(project_root)
+        if not server_url:
+            print("ERROR: No Kaggle URL saved for this project.")
+            sys.exit(session_guard.EXIT_FAILURE)
+        sync.bind_state_lock(project_root)
+        client = KaggleClient(server_url)
+        state = session_guard.probe(client)
+        if state == "expired":
+            sys.exit(session_guard.EXIT_EXPIRED)
+        if state == "offline":
+            print("[OFFLINE] Kaggle server is unreachable.")
+            sys.exit(session_guard.EXIT_OFFLINE)
+        manager = KernelManager(client, project_root)
+        if manager.stop_runner_kernel():
+            print("Stopped the persistent Kaggle runner kernel.")
+        else:
+            print("No persistent Kaggle runner kernel to stop.")
+        sys.exit(session_guard.EXIT_OK)
+
     if not namespace.script:
         parser.print_usage()
         sys.exit(session_guard.EXIT_USAGE)
@@ -330,6 +336,28 @@ def _main(argv=None):
     script_args = list(namespace.args or [])
     if script_args[:1] == ["--"]:
         script_args = script_args[1:]
+    known_flags = {
+        "--no-sync",
+        "--stop",
+        "--restart-kernel",
+        "--new-kernel",
+        "--shared",
+        "--version",
+    }
+    if any(arg in known_flags for arg in script_args):
+        print(
+            "Hint: this was passed to your script; put kaggle-run options "
+            "before the script name"
+        )
+
+    namespace.no_sync = (
+        namespace.no_sync
+        or os.getenv("KAGGLE_RUN_NO_SYNC", "").strip() == "1"
+    )
+    if namespace.new_kernel and (namespace.shared or namespace.restart_kernel):
+        parser.error("--new-kernel cannot be combined with --shared or --restart-kernel.")
+    if namespace.shared and os.getenv("KAGGLE_RUN_KERNEL", "").strip().lower() not in ("", "shared"):
+        parser.error("--shared cannot be combined with KAGGLE_RUN_KERNEL=<id>.")
 
     local_script = Path(namespace.script).resolve()
 
@@ -408,6 +436,8 @@ def _main(argv=None):
 
     print("Kaggle Jupyter Server: OK")
 
+    sync.bind_state_lock(project_root)
+
     # Preflight sync check
     sync_status = urlstore.sync_state(project_root)
     if sync_status != "running" and not namespace.no_sync:
@@ -434,23 +464,47 @@ def _main(argv=None):
         urlstore.delete_url(project_root)
         sys.exit(session_guard.EXIT_EXPIRED)
 
+    kernel_manager = KernelManager(client, project_root)
+    runner_slot = not namespace.new_kernel
+    if runner_slot and not kernel_manager.acquire_runner_slot():
+        print(RUNNER_BUSY_MESSAGE)
+        sys.exit(session_guard.EXIT_FAILURE)
+
+    kernel_id = None
     code = build_remote_code(remote_script, REMOTE_ROOT, script_args)
 
     print("Executing on Kaggle...")
     print()
 
     try:
+        kernel_setting = os.getenv("KAGGLE_RUN_KERNEL", "").strip()
+        if namespace.new_kernel:
+            kernel_id = kernel_manager.create_ephemeral_kernel()
+        elif namespace.shared or kernel_setting.lower() == "shared":
+            print("[WARNING] Using the shared Kaggle notebook kernel.")
+            kernel_id = kernel_manager.ensure_shared_kernel()
+        elif kernel_setting:
+            kernel_id = kernel_manager.ensure_pinned_kernel(kernel_setting)
+        elif namespace.restart_kernel:
+            kernel_id = kernel_manager.restart_runner_kernel()
+        else:
+            kernel_id = kernel_manager.ensure_runner_kernel()
+
         result = session_guard.guarded_call(
             client,
             client.execute,
             code,
+            kernel_id=kernel_id,
             user_expressions={"rc": "_KAGGLE_RUN_RC"},
         )
     except KeyboardInterrupt:
         print()
         print("Interrupting remote job...")
         try:
-            client.interrupt_kernel()
+            client.interrupt_kernel(kernel_id)
+        except KeyboardInterrupt:
+            print("Warning: second Ctrl+C; exiting immediately.")
+            sys.exit(130)
         except Exception as e:
             print(
                 "Interrupt request failed:",
@@ -460,7 +514,11 @@ def _main(argv=None):
         try:
             session_guard.guarded_call(
                 client,
-                lambda: client.execute("pass", timeout=DRAIN_TIMEOUT),
+                lambda: client.execute(
+                    "pass",
+                    kernel_id=kernel_id,
+                    timeout=DRAIN_TIMEOUT,
+                ),
             )
         except KeyboardInterrupt:
             print("Warning: exiting now; the remote job may still be running.")
@@ -473,11 +531,20 @@ def _main(argv=None):
     except session_guard.SessionExpired:
         urlstore.delete_url(project_root)
         sys.exit(session_guard.EXIT_EXPIRED)
+    finally:
+        try:
+            kernel_manager.shutdown_ephemeral_kernel()
+        finally:
+            kernel_manager.release_runner_slot()
 
     status = (result or {}).get("status")
     exit_code = parse_remote_rc(result or {})
-    if exit_code is None:
-        exit_code = 0 if status == "ok" else 1
+    if status == "unknown":
+        print("run result unknown (connection lost); check output on Kaggle")
+        exit_code = 1
+    elif exit_code is None:
+        print("run result unknown (connection lost); check output on Kaggle")
+        exit_code = 1
 
     print()
     print("=" * 60)
