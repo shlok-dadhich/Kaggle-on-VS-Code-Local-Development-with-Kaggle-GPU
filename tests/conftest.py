@@ -110,8 +110,9 @@ class FakeJupyterHandler(BaseHTTPRequestHandler):
 
             if subpath.startswith("files/"):
                 file_path = "/".join(parts[5:])
-                if file_path in self.storage and self.storage[file_path] != "DIR":
-                    data = self.storage[file_path]
+                storage_key = f"contents/{file_path}"
+                if storage_key in self.storage and self.storage[storage_key] != "DIR":
+                    data = self.storage[storage_key]
                     range_header = self.headers.get("Range")
                     if range_header and range_header.startswith("bytes="):
                         rng = range_header[6:].split("-")

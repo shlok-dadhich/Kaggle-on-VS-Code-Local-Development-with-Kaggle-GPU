@@ -241,13 +241,18 @@ def check_kagglesyncignore(project_root: Path) -> DoctorResult:
 
 def check_requirements_file(project_root: Path) -> DoctorResult:
     from . import sync
-    req_file = sync.select_requirements_file(project_root)
+    req_file, notices = sync.select_requirements_file(project_root)
     if req_file:
+        message = f"Selected requirements: {req_file.relative_to(project_root)}"
+        if notices:
+            message += f" ({' '.join(notices)})"
         return DoctorResult(
             "Requirements File",
             "PASS",
-            f"Selected requirements: {req_file.relative_to(project_root)}",
+            message,
         )
+    if notices:
+        return DoctorResult("Requirements File", "WARN", " ".join(notices))
     return DoctorResult(
         "Requirements File",
         "PASS",
@@ -875,6 +880,15 @@ def run_doctor(
         for r in results:
             print(r.format_line())
 
+    remote_session = next(
+        (result for result in results if result.name == "Remote Session"),
+        None,
+    )
+    if remote_session is not None and remote_session.status == "FAIL":
+        if "expired" in remote_session.message.lower():
+            return session_guard.EXIT_EXPIRED
+        if "unreachable" in remote_session.message.lower():
+            return session_guard.EXIT_OFFLINE
     return session_guard.EXIT_FAILURE if has_fail else session_guard.EXIT_OK
 
 

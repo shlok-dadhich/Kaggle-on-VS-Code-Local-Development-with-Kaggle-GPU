@@ -800,6 +800,12 @@ def main(argv=None):
         sys.exit(session_guard.EXIT_FAILURE)
 
     client = JupyterClient(server_url)
+    session_state = session_guard.probe(client)
+    if session_state == "expired":
+        fail_session_expired()
+    if session_state == "offline":
+        print("[OFFLINE] Kaggle server is unreachable.")
+        sys.exit(session_guard.EXIT_OFFLINE)
 
     try:
         response = client.session.get(

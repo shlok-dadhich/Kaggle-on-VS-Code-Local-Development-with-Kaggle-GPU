@@ -370,6 +370,14 @@ def main(argv=None):
         sys.exit(session_guard.EXIT_FAILURE)
 
     client = KaggleClient(server_url)
+    session_state = session_guard.probe(client)
+    if session_state == "expired":
+        urlstore.delete_url(project_root)
+        session_guard.log_session_expired()
+        sys.exit(session_guard.EXIT_EXPIRED)
+    if session_state == "offline":
+        print("[OFFLINE] Kaggle server is unreachable.")
+        sys.exit(session_guard.EXIT_OFFLINE)
 
     print()
     print("=" * 60)

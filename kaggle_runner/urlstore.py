@@ -20,6 +20,27 @@ DEFAULT_TTL_HOURS = 13.0
 _PERMISSION_WARNING_PRINTED = False
 
 
+def is_interactive() -> bool:
+    """Return whether both standard input and output are console handles."""
+    if sys.platform == "win32":
+        try:
+            import ctypes
+
+            kernel32 = ctypes.windll.kernel32
+            mode = ctypes.c_ulong()
+            stdin = kernel32.GetStdHandle(-10)
+            stdout = kernel32.GetStdHandle(-11)
+            return bool(
+                stdin
+                and stdout
+                and kernel32.GetConsoleMode(stdin, ctypes.byref(mode))
+                and kernel32.GetConsoleMode(stdout, ctypes.byref(mode))
+            )
+        except (AttributeError, OSError, TypeError, ValueError):
+            return False
+    return sys.stdin.isatty() and sys.stdout.isatty()
+
+
 def get_ttl_hours() -> float:
     raw = os.getenv("KAGGLE_RUNNER_URL_TTL_H")
     if raw:

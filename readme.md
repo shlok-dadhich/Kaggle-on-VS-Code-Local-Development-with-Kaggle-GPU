@@ -63,7 +63,7 @@ kaggle-pull outputs/model.pt
 | `KAGGLE_SYNC_USE_GITIGNORE` | Set to 1 to merge `.gitignore` rules into `.kagglesyncignore`. |
 | `KAGGLE_SYNC_ALLOW_ONEDRIVE` | Set to 1 to suppress OneDrive path warnings. |
 | `KAGGLE_SYNC_REQUIREMENTS` | Explicit requirements file path for remote dependency management. |
-| `KAGGLE_DEPS` | Remote dependency sync policy: `auto` (default), `prompt`, or `off`. |
+| `KAGGLE_DEPS` | Remote dependency sync policy: `auto` (default) or `off`. |
 | `KAGGLE_SYNC_PROTECTED` | Comma-separated list of protected packages never overwritten. |
 | `KAGGLE_SYNC_UNPROTECT` | Comma-separated list of packages to remove from protected list. |
 | `KAGGLE_RUN_TIMEOUT` | Remote kernel execution timeout in seconds. |

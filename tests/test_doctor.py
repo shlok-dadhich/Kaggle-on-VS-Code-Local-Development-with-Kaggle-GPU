@@ -64,10 +64,29 @@ def test_doctor_auth_failure(tmp_path, monkeypatch, fake_jupyter_server, capsys)
         fix=False,
     )
 
-    assert rc == 1
+    assert rc == doctor.session_guard.EXIT_EXPIRED
     out = capsys.readouterr().out
     assert "FAIL" in out
     assert "expired" in out.lower()
+
+
+def test_doctor_offline_exit_code(tmp_path, monkeypatch, fake_jupyter_server):
+    monkeypatch.setenv("KAGGLE_RUNNER_HOME", str(tmp_path.parent / f"{tmp_path.name}-runner"))
+    fake_jupyter_server.clear()
+    fake_jupyter_server.handler_cls.fail_500 = True
+    (tmp_path / ".kagglesyncignore").write_text(".kagglesyncignore\n", encoding="utf-8")
+
+    try:
+        rc = doctor.run_doctor(
+            project_root=tmp_path,
+            url=fake_jupyter_server.url,
+            deep=False,
+            as_json=False,
+            fix=False,
+        )
+        assert rc == doctor.session_guard.EXIT_OFFLINE
+    finally:
+        fake_jupyter_server.handler_cls.fail_500 = False
 
 
 def test_doctor_warning_on_no_gpu_and_no_internet(tmp_path, monkeypatch, fake_jupyter_server, capsys):
@@ -102,7 +121,7 @@ def test_doctor_warning_on_no_gpu_and_no_internet(tmp_path, monkeypatch, fake_ju
         )
 
     out = capsys.readouterr().out
-    assert "enable GPU in Kaggle session options" in out
+    assert "enable gpu in kaggle session options" in out.lower()
     assert "Kaggle Internet is off: enable it in notebook settings" in out
 
 
@@ -139,7 +158,7 @@ def test_doctor_wrong_upload_root_fails(tmp_path, monkeypatch, fake_jupyter_serv
 
     assert rc == 1
     out = capsys.readouterr().out
-    assert "upload root is not /kaggle/working" in out
+    assert "upload root is not /kaggle/working" in out.lower()
 
 
 def test_doctor_cleanup_on_ctrl_c(tmp_path, monkeypatch, fake_jupyter_server):

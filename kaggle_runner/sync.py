@@ -354,7 +354,7 @@ def note_auth_error(error):
 
     if not session_guard.SESSION_DEAD.is_set():
         session_guard.SESSION_DEAD.set()
-        session_guard._log_session_expired()
+        session_guard.log_session_expired()
 
     return True
 
@@ -2166,6 +2166,7 @@ class DependencyManager:
         self._dep_stop = threading.Event()
         self._dep_lock = threading.Lock()
         self._last_selection_notice = None
+        self._deps_off_reported = False
 
 
     def load_state(self):
@@ -2331,7 +2332,10 @@ class DependencyManager:
 
     def _dep_worker(self):
 
-        while not self._dep_stop.is_set():
+        while (
+            not self._dep_stop.is_set()
+            and not session_guard.SESSION_DEAD.is_set()
+        ):
 
             try:
                 quiet = bool(self._dep_queue.get(timeout=0.5))
@@ -2364,7 +2368,10 @@ class DependencyManager:
                     except Exception:
                         break
 
-                if self._dep_stop.is_set():
+                if (
+                    self._dep_stop.is_set()
+                    or session_guard.SESSION_DEAD.is_set()
+                ):
                     break
 
                 self._run_check(quiet=quiet)
@@ -2385,6 +2392,14 @@ class DependencyManager:
 
 
     def _run_check(self, quiet=False):
+        policy = os.getenv("KAGGLE_DEPS", "auto").strip().lower() or "auto"
+        if policy == "off":
+            if not self._deps_off_reported:
+                self._deps_off_reported = True
+                print("Dependencies: off (remote installs disabled)")
+            return "skipped"
+        if policy != "auto":
+            print(f"Unsupported KAGGLE_DEPS={policy!r}; using auto")
 
         selected, notices = select_requirements_file(
             self.project_root
@@ -3941,7 +3956,7 @@ def main(argv=None):
         env_url = os.getenv("KAGGLE_RUNNER_URL")
         if env_url and env_url.strip():
             url = env_url.strip()
-        elif sys.stdin.isatty():
+        elif urlstore.is_interactive():
             import getpass
             try:
                 url = getpass.getpass("Enter Kaggle URL: ").strip()
@@ -3955,6 +3970,11 @@ def main(argv=None):
             sys.exit(session_guard.EXIT_USAGE)
 
     # Save URL
+    if args.url:
+        print(
+            "Warning: URL on the command line can end up in shell history; "
+            "run kaggle-sync without arguments to use the hidden prompt"
+        )
     urlstore.save_url(proj, url)
 
     # Clean legacy file
