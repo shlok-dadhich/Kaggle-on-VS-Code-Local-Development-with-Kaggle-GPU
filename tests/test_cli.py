@@ -5,7 +5,7 @@ import subprocess
 import sys
 from unittest.mock import patch
 
-from kaggle_runner import sync, urlstore
+from kaggle_runner import urlstore
 
 
 def test_sync_no_url_no_tty_exits_2_no_traceback(tmp_path):
@@ -17,6 +17,7 @@ def test_sync_no_url_no_tty_exits_2_no_traceback(tmp_path):
         capture_output=True,
         text=True,
         env=env,
+        timeout=10,
     )
     assert res.returncode == 2
     assert "Traceback" not in res.stderr

@@ -3,8 +3,8 @@
 import json
 import os
 import time
-from pathlib import Path
-from unittest.mock import MagicMock, patch
+import pytest
+from unittest.mock import patch
 
 from kaggle_runner import runner_paths, sync, urlstore
 
@@ -55,8 +55,9 @@ def test_heartbeat_stale_after_pid_dead(tmp_path, monkeypatch):
 
 
 def test_kaggle_run_oneshot_sync_when_not_running(tmp_path, monkeypatch, fake_jupyter_server):
-    monkeypatch.setenv("KAGGLE_RUNNER_HOME", str(tmp_path / ".kaggle-runner"))
+    monkeypatch.setenv("KAGGLE_RUNNER_HOME", str(tmp_path.parent / f"{tmp_path.name}-runner"))
     fake_jupyter_server.clear()
+    (tmp_path / ".kagglesyncignore").write_text(".kagglesyncignore\n", encoding="utf-8")
 
     # Save URL
     urlstore.save_url(tmp_path, fake_jupyter_server.url)
@@ -75,7 +76,7 @@ def test_kaggle_run_oneshot_sync_when_not_running(tmp_path, monkeypatch, fake_ju
     assert synced == 1
 
     # Verify file is on fake server
-    remote_key = "local-project/script.py"
+    remote_key = "contents/local-project/script.py"
     assert remote_key in fake_jupyter_server.handler_cls.storage
 
     # Edit file while sync is stopped
@@ -88,7 +89,7 @@ def test_kaggle_run_oneshot_sync_when_not_running(tmp_path, monkeypatch, fake_ju
 
 
 def test_kaggle_run_no_sync_flag_honored(tmp_path, monkeypatch, fake_jupyter_server, capsys):
-    monkeypatch.setenv("KAGGLE_RUNNER_HOME", str(tmp_path / ".kaggle-runner"))
+    monkeypatch.setenv("KAGGLE_RUNNER_HOME", str(tmp_path.parent / f"{tmp_path.name}-runner"))
     fake_jupyter_server.clear()
 
     urlstore.save_url(tmp_path, fake_jupyter_server.url)

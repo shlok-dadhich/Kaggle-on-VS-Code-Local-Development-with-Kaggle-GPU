@@ -1,17 +1,16 @@
 """Secret protection, built-in exclusions, and doctor secret scan tests."""
 
-from pathlib import Path
 from kaggle_runner import doctor, ignore_rules, sync
 
 
 def test_secrets_never_uploaded_even_with_negation(tmp_path, monkeypatch, fake_jupyter_server):
-    monkeypatch.setenv("KAGGLE_RUNNER_HOME", str(tmp_path / ".kaggle-runner"))
+    monkeypatch.setenv("KAGGLE_RUNNER_HOME", str(tmp_path.parent / f"{tmp_path.name}-runner"))
     monkeypatch.delenv("KAGGLE_SYNC_ALLOW_SECRETS", raising=False)
     fake_jupyter_server.clear()
 
     # Create .kagglesyncignore with negation !.env and !kaggle.json
     (tmp_path / ".kagglesyncignore").write_text(
-        "!.env\n!kaggle.json\n!*.pem\n",
+        "!.env\n!kaggle.json\n!*.pem\n.kagglesyncignore\n",
         encoding="utf-8",
     )
 
@@ -33,10 +32,10 @@ def test_secrets_never_uploaded_even_with_negation(tmp_path, monkeypatch, fake_j
     # Only normal.py should be synced
     assert synced == 1
     storage = fake_jupyter_server.handler_cls.storage
-    assert "local-project/normal.py" in storage
-    assert "local-project/.env" not in storage
-    assert "local-project/kaggle.json" not in storage
-    assert "local-project/cert.pem" not in storage
+    assert "contents/local-project/normal.py" in storage
+    assert "contents/local-project/.env" not in storage
+    assert "contents/local-project/kaggle.json" not in storage
+    assert "contents/local-project/cert.pem" not in storage
 
 
 def test_doctor_scan_reports_hit_without_printing_secret(tmp_path, capsys):

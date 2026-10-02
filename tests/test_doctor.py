@@ -1,16 +1,15 @@
 """Doctor diagnostic checks and cleanup tests."""
 
 import json
-from pathlib import Path
 from unittest.mock import patch
 
-from kaggle_runner import doctor, urlstore
+from kaggle_runner import doctor
 
 
 def fake_execute_success(ws_base, base_url, token, kernel_id, code, on_text, user_expressions=None, timeout=None):
     exprs = {}
     if user_expressions:
-        for k, v in user_expressions.items():
+        for k in user_expressions:
             if k == "root_probe":
                 exprs["root_probe"] = {"data": {"text/plain": "True"}}
             elif k == "two":
@@ -94,7 +93,7 @@ def test_doctor_warning_on_no_gpu_and_no_internet(tmp_path, monkeypatch, fake_ju
         return {"status": "ok", "user_expressions": exprs, "error_text": ""}
 
     with patch("kaggle_runner.doctor.execute_in_kernel", side_effect=fake_no_gpu_no_net):
-        rc = doctor.run_doctor(
+        doctor.run_doctor(
             project_root=tmp_path,
             url=fake_jupyter_server.url,
             deep=False,
