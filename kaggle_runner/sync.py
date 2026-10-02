@@ -35,6 +35,7 @@ MAX_FILE_SIZE_MB = int(
     os.getenv("KAGGLE_SYNC_MAX_FILE_MB", "100")
 )
 MAX_FILE_SIZE = MAX_FILE_SIZE_MB * 1024 * 1024
+CONTENTS_FALLBACK_LIMIT_BYTES = 100 * 1024 * 1024
 
 # Files larger than this are uploaded with the chunked Contents API
 # protocol instead of one in-memory PUT.
@@ -873,35 +874,74 @@ class JupyterClient:
         return files
 
 
-    def download_file(self, remote_path, local_path):
-
+    def download_file(self, remote_path, local_path, size=None):
+        expected_size = size
+        encoded = "/".join(
+            quote(part, safe="")
+            for part in remote_path.strip("/").split("/")
+        )
         response = self.request_session().get(
-            self.api_url(remote_path),
+            f"{self.base_url}/files/{encoded}",
+            stream=True,
             timeout=REQUEST_TIMEOUT,
         )
-
-        response.raise_for_status()
-
-        data = response.json()
-        content = data.get("content", "")
-
-        if data.get("format") == "base64":
-            raw_content = base64.b64decode(content)
-        else:
-            raw_content = content.encode("utf-8")
-
-        local_path = Path(local_path)
-        local_path.parent.mkdir(parents=True, exist_ok=True)
-
-        temporary_path = local_path.with_name(
-            f".{local_path.name}.kaggle-sync.tmp"
-        )
-
+        temporary_path = None
         try:
-            temporary_path.write_bytes(raw_content)
+            if response.status_code in (401, 403):
+                response.raise_for_status()
+            if response.status_code == 404:
+                response.close()
+                if (
+                    not isinstance(expected_size, (int, float))
+                    or expected_size > CONTENTS_FALLBACK_LIMIT_BYTES
+                ):
+                    raise RuntimeError(
+                        "The /files/ download endpoint returned 404; "
+                        "refusing Contents API fallback for an unknown or "
+                        "larger-than-100-MB file."
+                    )
+                response = self.request_session().get(
+                    self.api_url(remote_path),
+                    timeout=REQUEST_TIMEOUT,
+                )
+                response.raise_for_status()
+                data = response.json()
+                if not isinstance(data, dict):
+                    raise ValueError("Contents API returned invalid file data")
+                content = data.get("content", "")
+                if data.get("format") == "base64":
+                    raw_content = base64.b64decode(content)
+                else:
+                    raw_content = content.encode("utf-8")
+                chunks = (raw_content,)
+            else:
+                response.raise_for_status()
+                chunks = response.iter_content(CHUNK_SIZE_BYTES)
+
+            local_path = Path(local_path)
+            local_path.parent.mkdir(parents=True, exist_ok=True)
+            temporary_path = local_path.with_name(
+                f".{local_path.name}.kaggle-sync.tmp"
+            )
+            downloaded = 0
+            with open(temporary_path, "wb") as handle:
+                for chunk in chunks:
+                    if not chunk:
+                        continue
+                    handle.write(chunk)
+                    downloaded += len(chunk)
+            if (
+                expected_size is not None
+                and downloaded != expected_size
+            ):
+                raise IOError(
+                    f"Remote download size mismatch: got {downloaded}, "
+                    f"expected {expected_size} bytes"
+                )
             os.replace(temporary_path, local_path)
         finally:
-            if temporary_path.exists():
+            response.close()
+            if temporary_path is not None and temporary_path.exists():
                 temporary_path.unlink()
 
 
@@ -950,6 +990,12 @@ def should_skip(path):
         return True
 
     if name.endswith(".kaggle-sync.tmp"):
+        return True
+
+    if name.endswith(".kaggle-pull.part"):
+        return True
+
+    if name.endswith(".kaggle-sync-part"):
         return True
 
     if name.endswith(".tmp"):
@@ -1524,7 +1570,9 @@ def iter_local_files(project_root):
             dirnames[:] = kept
 
         for name in filenames:
-            yield Path(dirpath) / name
+            path = Path(dirpath) / name
+            if not should_skip(path):
+                yield path
 
 
 def find_requirements(project_root):
@@ -3453,8 +3501,8 @@ def _list_remote_dir(client, remote_dir_path):
     ]
 
 
-def list_remote_tree_bfs(client, project_root):
-    """List remote files with iterative BFS, pruning heavy dirs.
+def _list_remote_tree(client, project_root, include_directories):
+    """List remote tree entries with iterative BFS, pruning heavy dirs.
 
     Never descends into directories matched by ignore rules,
     EXCLUDED_DIRS, REMOTE_EXCLUDED_DIRS or the poll skip list.
@@ -3463,7 +3511,7 @@ def list_remote_tree_bfs(client, project_root):
     subtrees (it does not change when nested files change).
     """
 
-    found_files = []
+    found_entries = []
     pending_dirs = [REMOTE_ROOT]
 
     executor = ThreadPoolExecutor(max_workers=REMOTE_POLL_CONCURRENCY)
@@ -3502,13 +3550,25 @@ def list_remote_tree_bfs(client, project_root):
                             relative,
                         ):
                             pending_dirs.append(entry_path)
+                            if include_directories:
+                                found_entries.append(entry)
 
                     elif entry_type == "file":
-                        found_files.append(entry)
+                        found_entries.append(entry)
     finally:
         executor.shutdown(wait=True, cancel_futures=True)
 
-    return found_files
+    return found_entries
+
+
+def list_remote_tree_bfs(client, project_root):
+    """List remote files only, pruning ignored and excluded directories."""
+    return _list_remote_tree(client, project_root, include_directories=False)
+
+
+def list_tree(client, project_root):
+    """List traversable remote files and directories for path expansion."""
+    return _list_remote_tree(client, project_root, include_directories=True)
 
 
 def remote_sync_loop(client, project_root, stop_event):
@@ -3623,7 +3683,7 @@ def remote_sync_loop(client, project_root, stop_event):
                 mark_recently_downloaded(local_path)
 
                 print("[DOWNLOAD]", relative)
-                client.download_file(remote_path, local_path)
+                client.download_file(remote_path, local_path, size=size)
 
                 pending.pop(relative, None)
                 changed = True

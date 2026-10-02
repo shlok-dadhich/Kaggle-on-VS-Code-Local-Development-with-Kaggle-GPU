@@ -29,6 +29,7 @@ import requests
 from . import session_guard, sync, urlstore
 from . import __version__
 from .sync import (
+    CONTENTS_FALLBACK_LIMIT_BYTES,
     JupyterClient,
     REMOTE_ROOT,
     REQUEST_TIMEOUT,
@@ -38,9 +39,6 @@ from .sync import (
 PART_SUFFIX = ".kaggle-pull.part"
 
 CHUNK_BYTES = 1024 * 1024
-
-# Whole-file fallback ceiling for the Contents API.
-CONTENTS_FALLBACK_LIMIT_BYTES = 100 * 1024 * 1024
 
 # Retries for raw-byte downloads on timeout or 5xx.
 PULL_RETRY_BACKOFFS = (1, 2, 4)
@@ -114,6 +112,12 @@ def parse_args(argv):
         "--force",
         action="store_true",
         help="Overwrite differing local files.",
+    )
+
+    parser.add_argument(
+        "--include-ignored",
+        action="store_true",
+        help="Allow pulling remote files that match local ignore rules.",
     )
 
     parser.add_argument(
@@ -229,6 +233,7 @@ def fetch_remote_model(client, relative):
 
     response = client.request_session().get(
         client.api_url(f"{REMOTE_ROOT}/{relative}"),
+        params={"content": 0},
         timeout=REQUEST_TIMEOUT,
     )
 
@@ -382,7 +387,7 @@ def print_pending(pending):
 def expand_specs(client, project_root, specs):
     """Expand globs/directories to remote relative paths."""
 
-    remote_files = sync.list_remote_tree_bfs(client, project_root)
+    remote_files = sync.list_tree(client, project_root)
 
     files = []
     directories = set()
@@ -627,8 +632,28 @@ def pull_one(client, project_root, relative, size, args, max_bytes):
     """Download one remote file. Returns True on success."""
 
     project_root = Path(project_root).resolve()
-    destination_path = project_root / Path(relative)
-    if sync.runner_paths.is_runner_home_path(project_root, destination_path):
+    try:
+        relative = to_relative(relative)
+    except ValueError as exc:
+        print(f"[REFUSE] {relative}: {exc}")
+        return False
+
+    if sync.should_skip(Path(relative)):
+        print(f"[REFUSE] {relative}: temporary or excluded sync file.")
+        return False
+
+    source_path = project_root / Path(relative)
+    if (
+        sync.is_ignored_path(project_root, source_path)
+        and not getattr(args, "include_ignored", False)
+    ):
+        print(
+            f"[REFUSE] {relative}: matches .kagglesyncignore or a "
+            "secret exclusion; use --include-ignored to override."
+        )
+        return False
+
+    if sync.runner_paths.is_runner_home_path(project_root, source_path):
         print(
             f"[REFUSE] {relative}: runner state is never pulled into the project."
         )
@@ -642,11 +667,30 @@ def pull_one(client, project_root, relative, size, args, max_bytes):
         return True
 
     if args.dest:
-        destination = (
-            Path(args.dest).expanduser() / Path(relative).name
-        )
+        destination_root = Path(args.dest).expanduser()
+        if any(part == ".." for part in destination_root.parts):
+            print(f"[REFUSE] {relative}: destination cannot contain '..'.")
+            return False
+        if not destination_root.is_absolute():
+            destination_root = project_root / destination_root
+        destination = destination_root / Path(relative).name
     else:
-        destination = destination_path
+        destination = source_path
+
+    destination = destination.resolve()
+    try:
+        destination.relative_to(project_root)
+    except ValueError:
+        print(
+            f"[REFUSE] {relative}: destination resolves outside the project."
+        )
+        return False
+
+    if sync.runner_paths.is_runner_home_path(project_root, destination):
+        print(
+            f"[REFUSE] {relative}: runner state is never pulled into the project."
+        )
+        return False
 
     destination.parent.mkdir(parents=True, exist_ok=True)
 
@@ -713,6 +757,7 @@ def pull_one(client, project_root, relative, size, args, max_bytes):
             client.download_file(
                 f"{REMOTE_ROOT}/{relative}",
                 part_path,
+                size=size,
             )
 
         except Exception as e:
@@ -883,6 +928,20 @@ def _main(argv=None):
             failed += 1
 
     for relative in targets:
+
+        if (
+            sync.is_ignored_path(
+                project_root,
+                project_root / Path(relative),
+            )
+            and not namespace.include_ignored
+        ):
+            print(
+                f"[REFUSE] {relative}: matches .kagglesyncignore or a "
+                "secret exclusion; use --include-ignored to override."
+            )
+            failed += 1
+            continue
 
         try:
             model = fetch_remote_model(client, relative)
