@@ -1,0 +1,10 @@
+.py
+────
+kaggle-sync "URL"
+kaggle-run train.py
+
+
+.ipynb
+──────
+kaggle-sync "URL"
+Open notebook → Select Kaggle kernel → Run cells
