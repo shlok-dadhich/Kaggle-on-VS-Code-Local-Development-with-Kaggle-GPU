@@ -7,26 +7,34 @@ This tool is unofficial and relies on Kaggle's internal Jupyter proxy, which may
 - Python >= 3.9 on Windows, Linux, or macOS.
 - Kaggle account with phone verification enabled (required for GPU accelerators and outbound Internet).
 
-## Install (Windows)
-Run `install.cmd` once from this repository. It installs the package and adds its `cmd` folder to your user PATH; open a new terminal afterward. Keep this repository at the same location. The launchers and installed `kaggle-*` commands can then be run from any directory.
+## Setup
+Clone/download this repository and keep it at the same location after setup. Run the setup file for your OS from the repository folder. It creates an isolated Python environment, installs dependencies, adds the commands to your user PATH, and optionally saves your local project folder as the default. Open a new terminal when setup finishes.
 
-On macOS/Linux, install the package with:
-```bash
-pip install -e .
-# or: pipx install .
+**Windows (Command Prompt):** Run `install.cmd` or `setup\windows\setup.cmd`.
+
+**Linux:**
+```sh
+sh setup/linux/setup.sh
 ```
+
+**macOS:**
+```sh
+sh setup/macos/setup.sh
+```
+
+Python 3.9+ is required on all platforms. On Linux, if virtual-environment creation fails, install your distribution's matching Python venv package (for example, `python3-venv` on Debian/Ubuntu) and rerun setup. On macOS, install Python from [python.org](https://www.python.org/downloads/macos/) or [Homebrew](https://docs.brew.sh/Homebrew-and-Python) if needed. See Python's [venv guide](https://docs.python.org/3/library/venv.html) and the [Python Packaging User Guide](https://packaging.python.org/en/latest/guides/installing-using-pip-and-virtual-environments/) for details.
 
 ## Quick Start
 1. Start an interactive Kaggle notebook session with GPU and Internet enabled.
 2. In any terminal, select your local project and start sync:
 ```bash
-kaggle-sync --project "C:\work\my-project"
+kaggle-sync --project "/path/to/my-project"
 ```
-When prompted, paste the URL (hidden input avoids saving the token in shell history). To use one default project from any directory, run `setx KAGGLE_PROJECT_DIR "C:\work\my-project"` in Windows CMD and open a new terminal. You can also pass `--project` each time. Without either setting, commands use the current directory.
+Use a Windows path such as `C:\work\my-project` on Windows. Setup can save a default project folder when prompted; if you skipped that, pass `--project` each time or set `KAGGLE_PROJECT_DIR`. When prompted, paste the Kaggle URL (hidden input avoids saving the token in shell history). Without a default or `--project`, commands use the current directory.
 3. From any directory, run scripts or pull outputs for that project:
 ```bash
-kaggle-run --project "C:\work\my-project" train.py --epochs 5 --lr 0.001
-kaggle-pull --project "C:\work\my-project" --list
+kaggle-run --project "/path/to/my-project" train.py --epochs 5 --lr 0.001
+kaggle-pull --project "/path/to/my-project" --list
 ```
 *Notebook flow:* In VS Code, select the Kaggle remote kernel and set working directory to `/kaggle/working/local-project`.
 

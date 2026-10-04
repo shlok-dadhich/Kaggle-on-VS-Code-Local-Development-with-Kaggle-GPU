@@ -1,12 +1,11 @@
 @echo off
 rem KAGGLE_LOCAL_RUNNER_LAUNCHER v1
 setlocal
-set "KAGGLE_RUNNER_SOURCE=%~dp0.."
-if defined PYTHONPATH (
-    set "PYTHONPATH=%KAGGLE_RUNNER_SOURCE%;%PYTHONPATH%"
-) else (
-    set "PYTHONPATH=%KAGGLE_RUNNER_SOURCE%"
+set "KAGGLE_RUNNER_PYTHON=%LOCALAPPDATA%\KaggleLocalRunner\venv\Scripts\python.exe"
+if not exist "%KAGGLE_RUNNER_PYTHON%" (
+    echo ERROR: Kaggle Runner is not installed. Run install.cmd from the repository.
+    exit /b 1
 )
-python -c "from kaggle_runner.sync import main; main()" %*
+"%KAGGLE_RUNNER_PYTHON%" -c "from kaggle_runner.sync import main; main()" %*
 set "KAGGLE_RUNNER_EXIT=%ERRORLEVEL%"
 endlocal & exit /b %KAGGLE_RUNNER_EXIT%

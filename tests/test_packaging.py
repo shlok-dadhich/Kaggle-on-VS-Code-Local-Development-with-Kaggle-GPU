@@ -11,6 +11,17 @@ import pytest
 def test_windows_launchers_are_available():
     root = Path(__file__).resolve().parent.parent
     assert (root / "install.cmd").is_file()
+    windows_setup = root / "setup" / "windows" / "setup.cmd"
+    linux_setup = root / "setup" / "linux" / "setup.sh"
+    macos_setup = root / "setup" / "macos" / "setup.sh"
+    unix_setup = root / "setup" / "unix" / "setup.sh"
+    assert windows_setup.is_file()
+    assert linux_setup.is_file()
+    assert macos_setup.is_file()
+    assert unix_setup.is_file()
+    assert "python -m venv" in windows_setup.read_text(encoding="utf-8")
+    assert "../unix/setup.sh" in linux_setup.read_text(encoding="utf-8")
+    assert "../unix/setup.sh" in macos_setup.read_text(encoding="utf-8")
     for name in ("kaggle-sync", "kaggle-run", "kaggle-pull"):
         launcher = root / "cmd" / f"{name}.cmd"
         assert launcher.is_file()
@@ -24,6 +35,15 @@ def test_windows_launchers_are_available():
 )
 def test_windows_launchers_work_outside_repository(tmp_path, name):
     root = Path(__file__).resolve().parent.parent
+    venv_python = (
+        Path(os.environ.get("LOCALAPPDATA", ""))
+        / "KaggleLocalRunner"
+        / "venv"
+        / "Scripts"
+        / "python.exe"
+    )
+    if not venv_python.is_file():
+        pytest.skip("Run the Windows setup script before testing installed launchers")
     launcher = root / "cmd" / f"{name}.cmd"
     workdir = tmp_path / "external project"
     workdir.mkdir()
