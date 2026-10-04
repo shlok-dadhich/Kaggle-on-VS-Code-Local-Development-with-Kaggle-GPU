@@ -98,13 +98,23 @@ def check_old_launchers() -> DoctorResult:
     if which:
         which_lower = which.lower()
         is_cmd = which_lower.endswith(".cmd")
+        is_managed_launcher = False
+        if is_cmd:
+            try:
+                is_managed_launcher = (
+                    "KAGGLE_LOCAL_RUNNER_LAUNCHER"
+                    in Path(which).read_text(encoding="utf-8", errors="replace")[:512]
+                )
+            except OSError:
+                pass
         is_shadow_dir = (
             "kaggle-runner" in which_lower
             and "site-packages" not in which_lower
             and "scripts" not in which_lower
             and ".venv" not in which_lower
+            and not (is_cmd and is_managed_launcher)
         )
-        if is_cmd or is_shadow_dir:
+        if (is_cmd and not is_managed_launcher) or is_shadow_dir:
             return DoctorResult(
                 "Old Launchers",
                 "WARN",
@@ -827,7 +837,7 @@ def run_doctor(
     fix: bool = False,
 ) -> int:
     if project_root is None:
-        project_root = Path.cwd().resolve()
+        project_root = runner_paths.resolve_project_root()
     else:
         project_root = Path(project_root).resolve()
 
@@ -924,13 +934,17 @@ def _main(argv=None):
         description="Diagnose local environment and remote Kaggle session.",
     )
     parser.add_argument("url", nargs="?", help="Optional Kaggle session URL")
-    parser.add_argument("--project", default=None, help="Project directory (default: cwd)")
+    parser.add_argument(
+        "--project",
+        default=None,
+        help="Project directory (default: KAGGLE_PROJECT_DIR or cwd)",
+    )
     parser.add_argument("--deep", action="store_true", help="Run 45s silent keepalive test")
     parser.add_argument("--json", action="store_true", dest="as_json", help="Output machine-readable JSON")
     parser.add_argument("--fix", action="store_true", help="Apply safe local fixes")
 
     args = parser.parse_args(argv)
-    proj = Path(args.project).resolve() if args.project else Path.cwd().resolve()
+    proj = runner_paths.resolve_project_root(args.project)
     rc = run_doctor(
         project_root=proj,
         url=args.url,

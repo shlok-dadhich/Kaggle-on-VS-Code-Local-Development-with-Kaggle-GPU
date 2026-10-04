@@ -7,24 +7,26 @@ This tool is unofficial and relies on Kaggle's internal Jupyter proxy, which may
 - Python >= 3.9 on Windows, Linux, or macOS.
 - Kaggle account with phone verification enabled (required for GPU accelerators and outbound Internet).
 
-## Install
+## Install (Windows)
+Run `install.cmd` once from this repository. It installs the package and adds its `cmd` folder to your user PATH; open a new terminal afterward. Keep this repository at the same location. The launchers and installed `kaggle-*` commands can then be run from any directory.
+
+On macOS/Linux, install the package with:
 ```bash
 pip install -e .
 # or: pipx install .
 ```
-> **Migration Note:** If you previously used `.cmd` launchers, remove `C:\kaggle-runner` from your `PATH`.
 
 ## Quick Start
 1. Start an interactive Kaggle notebook session with GPU and Internet enabled.
-2. Copy the active Jupyter proxy URL (`https://<host>/k/<session_id>/<token>/proxy`).
-3. In your local project directory, start background sync:
+2. In any terminal, select your local project and start sync:
 ```bash
-kaggle-sync
+kaggle-sync --project "C:\work\my-project"
 ```
-When prompted, paste the URL (hidden input avoids saving the token in shell history).
-4. In another terminal, run your scripts or open local notebooks:
+When prompted, paste the URL (hidden input avoids saving the token in shell history). To use one default project from any directory, run `setx KAGGLE_PROJECT_DIR "C:\work\my-project"` in Windows CMD and open a new terminal. You can also pass `--project` each time. Without either setting, commands use the current directory.
+3. From any directory, run scripts or pull outputs for that project:
 ```bash
-kaggle-run train.py --epochs 5 --lr 0.001
+kaggle-run --project "C:\work\my-project" train.py --epochs 5 --lr 0.001
+kaggle-pull --project "C:\work\my-project" --list
 ```
 *Notebook flow:* In VS Code, select the Kaggle remote kernel and set working directory to `/kaggle/working/local-project`.
 
@@ -32,10 +34,10 @@ kaggle-run train.py --epochs 5 --lr 0.001
 | Command | Description |
 |---|---|
 | `kaggle-sync [URL] [--project DIR]` | Start live bi-directional sync (prompts for URL if omitted). |
-| `kaggle-sync doctor [URL] [--deep] [--json] [--fix]` | Run environment and server diagnostic health checks. |
+| `kaggle-sync doctor [URL] [--project DIR] [--deep] [--json] [--fix]` | Run environment and server diagnostic health checks. |
 | `kaggle-sync forget [--project DIR]` | Delete saved project URL, heartbeat, and legacy files. |
-| `kaggle-run <script.py> [--no-sync] [args...]` | Run Python script on Kaggle in a fresh subprocess. |
-| `kaggle-pull [paths...] [--list] [--all-pending]` | Pull remote checkpoints/outputs back to local project. |
+| `kaggle-run [--project DIR] <script.py> [--no-sync] [args...]` | Run Python script on Kaggle in a fresh subprocess. |
+| `kaggle-pull [--project DIR] [paths...] [--list] [--all-pending]` | Pull remote checkpoints/outputs back to local project. |
 
 ## .kagglesyncignore and Datasets
 - Local `.kagglesyncignore` uses gitignore wildmatch syntax to exclude large data, logs, and caches.
@@ -51,6 +53,7 @@ kaggle-pull outputs/model.pt
 | Variable | Description |
 |---|---|
 | `KAGGLE_RUNNER_URL` | Kaggle session Jupyter proxy URL (takes precedence over saved file). |
+| `KAGGLE_PROJECT_DIR` | Default local project directory for commands (overridden by `--project`). |
 | `KAGGLE_RUNNER_URL_TTL_H` | Saved URL expiration in hours (default: 13). |
 | `KAGGLE_RUNNER_HOME` | Directory for runner state and url storage (default: ~/.kaggle-runner). |
 | `KAGGLE_SYNC_ALLOW_SECRETS` | Set to 1 to disable built-in secret exclusion (default: 0). |

@@ -26,7 +26,7 @@ from urllib.parse import quote
 
 import requests
 
-from . import session_guard, sync, urlstore
+from . import runner_paths, session_guard, sync, urlstore
 from . import __version__
 from .sync import (
     CONTENTS_FALLBACK_LIMIT_BYTES,
@@ -106,6 +106,11 @@ def parse_args(argv):
         "--dest",
         default=None,
         help="Local destination directory for pulled files.",
+    )
+    parser.add_argument(
+        "--project",
+        default=None,
+        help="Project directory (default: KAGGLE_PROJECT_DIR or cwd).",
     )
 
     parser.add_argument(
@@ -839,7 +844,10 @@ def _main(argv=None):
 
     namespace, max_bytes = parse_args(argv)
 
-    project_root = Path.cwd().resolve()
+    project_root = runner_paths.resolve_project_root(namespace.project)
+    if not project_root.is_dir():
+        print(f"ERROR: Project directory does not exist: {project_root}")
+        sys.exit(session_guard.EXIT_FAILURE)
 
     sync.bind_state_lock(project_root)
 
@@ -849,9 +857,9 @@ def _main(argv=None):
         print()
         print("ERROR: No Kaggle URL saved for this project.")
         print()
-        print("Run kaggle-sync from this project folder first:")
+        print("Run kaggle-sync for this project first:")
         print()
-        print('  kaggle-sync "KAGGLE_VSCODE_URL"')
+        print("  kaggle-sync --project <project>")
         print()
         sys.exit(session_guard.EXIT_FAILURE)
 

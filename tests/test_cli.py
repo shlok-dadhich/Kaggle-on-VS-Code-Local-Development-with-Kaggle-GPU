@@ -105,6 +105,29 @@ def test_run_returns_offline_exit_code(tmp_path, monkeypatch, fake_jupyter_serve
         fake_jupyter_server.handler_cls.fail_500 = False
 
 
+def test_run_uses_project_option_from_another_working_directory(
+    tmp_path,
+    monkeypatch,
+    capsys,
+):
+    from kaggle_runner import run
+
+    project = tmp_path / "project"
+    project.mkdir()
+    (project / "train.py").write_text("print('found')", encoding="utf-8")
+    other_directory = tmp_path / "other"
+    other_directory.mkdir()
+    monkeypatch.chdir(other_directory)
+    monkeypatch.setenv("KAGGLE_RUNNER_HOME", str(tmp_path / "runner-home"))
+
+    with pytest.raises(SystemExit):
+        run.main(["--project", str(project), "train.py"])
+
+    output = capsys.readouterr().out
+    assert "No Kaggle URL saved for this project" in output
+    assert "File not found" not in output
+
+
 def test_pull_returns_offline_exit_code(tmp_path, monkeypatch, fake_jupyter_server):
     from kaggle_runner import pull, session_guard, urlstore
 

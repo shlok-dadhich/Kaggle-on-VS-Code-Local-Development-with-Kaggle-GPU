@@ -15,7 +15,7 @@ from urllib.parse import urlsplit, quote
 
 import requests
 
-from . import session_guard, sync, urlstore
+from . import runner_paths, session_guard, sync, urlstore
 from . import __version__
 from .kernel_exec import execute_in_kernel
 from .kernel_manager import KernelManager, RUNNER_BUSY_MESSAGE
@@ -282,6 +282,11 @@ def _main(argv=None):
         help="Local .py file inside the project directory.",
     )
     parser.add_argument(
+        "--project",
+        default=None,
+        help="Project directory (default: KAGGLE_PROJECT_DIR or cwd).",
+    )
+    parser.add_argument(
         "--no-sync",
         action="store_true",
         help="Skip one-shot preflight sync before running.",
@@ -318,11 +323,14 @@ def _main(argv=None):
         sys.exit(session_guard.EXIT_USAGE)
 
     namespace = parser.parse_args(argv)
+    project_root = runner_paths.resolve_project_root(namespace.project)
+    if not project_root.is_dir():
+        print(f"ERROR: Project directory does not exist: {project_root}")
+        sys.exit(session_guard.EXIT_FAILURE)
 
     if namespace.stop:
         if namespace.script:
             parser.error("--stop cannot be combined with a script.")
-        project_root = Path.cwd().resolve()
         server_url = urlstore.load_url(project_root)
         if not server_url:
             print("ERROR: No Kaggle URL saved for this project.")
@@ -372,7 +380,12 @@ def _main(argv=None):
     if namespace.shared and os.getenv("KAGGLE_RUN_KERNEL", "").strip().lower() not in ("", "shared"):
         parser.error("--shared cannot be combined with KAGGLE_RUN_KERNEL=<id>.")
 
-    local_script = Path(namespace.script).resolve()
+    script_path = Path(namespace.script).expanduser()
+    local_script = (
+        script_path.resolve()
+        if script_path.is_absolute()
+        else (project_root / script_path).resolve()
+    )
 
     if not local_script.exists():
         print()
@@ -386,12 +399,11 @@ def _main(argv=None):
         print()
         sys.exit(session_guard.EXIT_FAILURE)
 
-    project_root = Path.cwd().resolve()
     try:
         relative_path = local_script.relative_to(project_root)
     except ValueError:
         print()
-        print("ERROR: The Python file must be inside the current project directory.")
+        print("ERROR: The Python file must be inside the selected project directory.")
         print(f"Project : {project_root}")
         print(f"File    : {local_script}")
         print()
@@ -405,8 +417,8 @@ def _main(argv=None):
     if not server_url:
         print()
         print("ERROR: No Kaggle URL saved for this project.")
-        print("Run kaggle-sync from this project folder first:")
-        print('  kaggle-sync "KAGGLE_VSCODE_URL"')
+        print("Run kaggle-sync for this project first:")
+        print("  kaggle-sync --project <project>")
         print()
         sys.exit(session_guard.EXIT_FAILURE)
 

@@ -51,6 +51,20 @@ def test_doctor_healthy_fake_server(tmp_path, monkeypatch, fake_jupyter_server, 
     assert temp_files == [], f"Doctor left temporary files behind: {temp_files}"
 
 
+def test_doctor_accepts_managed_windows_launcher(tmp_path, monkeypatch):
+    launcher = tmp_path / "kaggle-runner" / "cmd" / "kaggle-sync.cmd"
+    launcher.parent.mkdir(parents=True)
+    launcher.write_text(
+        "rem KAGGLE_LOCAL_RUNNER_LAUNCHER v1\n",
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(doctor.shutil, "which", lambda _name: str(launcher))
+
+    result = doctor.check_old_launchers()
+
+    assert result.status == "PASS"
+
+
 def test_doctor_auth_failure(tmp_path, monkeypatch, fake_jupyter_server, capsys):
     monkeypatch.setenv("KAGGLE_RUNNER_HOME", str(tmp_path / ".kaggle-runner"))
     fake_jupyter_server.clear()

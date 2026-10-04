@@ -3947,9 +3947,13 @@ def _main(argv=None):
             prog="kaggle-sync forget",
             description="Delete this project's URL file, heartbeat, and legacy URL files.",
         )
-        parser.add_argument("--project", default=None, help="Project directory (default: cwd)")
+        parser.add_argument(
+            "--project",
+            default=None,
+            help="Project directory (default: KAGGLE_PROJECT_DIR or cwd)",
+        )
         args = parser.parse_args(argv[1:])
-        proj = Path(args.project).resolve() if args.project else Path.cwd().resolve()
+        proj = runner_paths.resolve_project_root(args.project)
         removed = urlstore.forget(proj)
         if removed:
             print("Removed:")
@@ -3964,7 +3968,11 @@ def _main(argv=None):
         description="Synchronize local project files to Kaggle GPU environment.",
     )
     parser.add_argument("url", nargs="?", help="Kaggle Jupyter Server URL")
-    parser.add_argument("--project", default=None, help="Project directory (default: cwd)")
+    parser.add_argument(
+        "--project",
+        default=None,
+        help="Project directory (default: KAGGLE_PROJECT_DIR or cwd)",
+    )
     parser.add_argument("--version", action="version", version=f"%(prog)s {__version__}")
 
     try:
@@ -3972,7 +3980,7 @@ def _main(argv=None):
     except SystemExit as se:
         sys.exit(se.code)
 
-    proj = Path(args.project).resolve() if args.project else Path.cwd().resolve()
+    proj = runner_paths.resolve_project_root(args.project)
     if not proj.exists() or not proj.is_dir():
         print(f"ERROR: Project directory does not exist: {proj}", file=sys.stderr)
         sys.exit(session_guard.EXIT_USAGE)

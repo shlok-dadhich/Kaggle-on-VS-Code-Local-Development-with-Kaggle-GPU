@@ -1,14 +1,41 @@
 """Packaging and installation tests."""
 
+import os
 import subprocess
 import sys
 from pathlib import Path
 
+import pytest
 
-def test_no_cmd_files_remain():
+
+def test_windows_launchers_are_available():
     root = Path(__file__).resolve().parent.parent
-    cmd_files = list(root.glob("*.cmd"))
-    assert cmd_files == [], f"Found leftover .cmd files: {cmd_files}"
+    assert (root / "install.cmd").is_file()
+    for name in ("kaggle-sync", "kaggle-run", "kaggle-pull"):
+        launcher = root / "cmd" / f"{name}.cmd"
+        assert launcher.is_file()
+        assert "KAGGLE_LOCAL_RUNNER_LAUNCHER" in launcher.read_text(encoding="utf-8")
+
+
+@pytest.mark.skipif(os.name != "nt", reason="Windows command launchers require cmd.exe")
+@pytest.mark.parametrize(
+    "name",
+    ("kaggle-sync", "kaggle-run", "kaggle-pull"),
+)
+def test_windows_launchers_work_outside_repository(tmp_path, name):
+    root = Path(__file__).resolve().parent.parent
+    launcher = root / "cmd" / f"{name}.cmd"
+    workdir = tmp_path / "external project"
+    workdir.mkdir()
+    result = subprocess.run(
+        ["cmd.exe", "/d", "/c", str(launcher), "--help"],
+        cwd=workdir,
+        capture_output=True,
+        text=True,
+        timeout=20,
+    )
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert f"usage: {name}" in result.stdout.lower()
 
 
 def test_entrypoints_version_and_help():

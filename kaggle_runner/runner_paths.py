@@ -27,6 +27,16 @@ def runner_home() -> Path:
     return Path.home() / ".kaggle-runner"
 
 
+def resolve_project_root(project=None) -> Path:
+    """Resolve an explicit project, KAGGLE_PROJECT_DIR, or the current directory."""
+    selected = project
+    if selected is None:
+        selected = os.getenv("KAGGLE_PROJECT_DIR")
+    if selected is None or not str(selected).strip():
+        return Path.cwd().resolve()
+    return Path(selected).expanduser().resolve()
+
+
 def is_within(path, root) -> bool:
     """Return whether path resolves inside root, including equality."""
     try:
